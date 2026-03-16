@@ -1,0 +1,42 @@
+# ── Django core ──────────────────────────────────────────────────
+Django==5.1.*
+django-tenants==3.7.*          # Separate PostgreSQL schema per tenant
+djangorestframework==3.15.*    # REST API
+djangorestframework-simplejwt==5.3.*  # JWT auth
+django-cors-headers==4.4.*
+django-filter==24.*
+dj-database-url==2.*           # Parse DATABASE_URL env var
+django-environ==0.11.*         # .env file loading
+
+# ── GraphQL ──────────────────────────────────────────────────────
+graphene-django==3.2.*
+graphene==3.3.*
+django-graphql-jwt==0.4.*      # JWT auth for GraphQL
+
+# ── Celery ───────────────────────────────────────────────────────
+celery==5.4.*
+django-celery-beat==2.7.*      # Periodic tasks stored in DB
+django-celery-results==2.5.*   # Task results stored in DB
+kombu==5.3.*                   # RabbitMQ transport
+
+# ── Database ─────────────────────────────────────────────────────
+psycopg2-binary==2.9.*
+redis==5.0.*                   # Redis client (cache + Celery backend)
+django-redis==5.4.*            # Django cache backend using Redis
+
+# ── Storage ──────────────────────────────────────────────────────
+cloudinary==1.40.*
+django-cloudinary-storage==0.3.*
+
+# ── PDF / Anti-cheat ─────────────────────────────────────────────
+httpx==0.27.*                  # HTTP client → Gotenberg API
+selenium==4.21.*               # Anti-cheat browser automation
+
+# ── Utils ────────────────────────────────────────────────────────
+Pillow==10.*                   # Image processing
+python-dateutil==2.9.*
+pytz==2024.*
+openpyxl==3.1.*                # Excel import (questions CSV/Excel)
+python-csv==0.0.*
+drf-spectacular==0.27.*            # OpenAPI 3.1 schema generation
+drf-spectacular[sidecar]==0.27.*   # Swagger UI + Redoc static assets

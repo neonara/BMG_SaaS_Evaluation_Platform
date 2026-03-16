@@ -1,0 +1,21 @@
+-r base.txt
+# Testing
+pytest==8.*
+pytest-django==4.8.*
+pytest-cov==5.*
+factory-boy==3.3.*            # Test data factories
+faker==25.*
+model-bakery==1.18.*
+
+# Code quality
+flake8==7.*
+black==24.*
+isort==5.*
+mypy==1.10.*
+django-stubs==5.*
+djangorestframework-stubs==3.*
+
+# Dev tools
+django-debug-toolbar==4.*
+ipython==8.*
+django-extensions==3.*

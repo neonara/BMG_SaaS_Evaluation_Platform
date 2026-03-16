@@ -1,0 +1,344 @@
+# ============================================================
+# BMG Platform — CI/CD Pipeline
+# Runs on: Django API + Next.js Platform dashboard
+# Registry: GitHub Container Registry (GHCR)
+# Deploy target: OVH VPS via SSH
+# ============================================================
+
+name: Platform CI/CD
+
+on:
+  push:
+    branches: [main, dev]
+    paths:
+      - "backend/**"
+      - "frontend/platform/**"
+      - "docker-compose.yml"
+      - ".github/workflows/platform.yml"
+  pull_request:
+    branches: [main, dev]
+  workflow_dispatch:
+    inputs:
+      deploy_prod:
+        description: "Deploy to production?"
+        required: true
+        default: "false"
+        type: boolean
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_DJANGO: ghcr.io/${{ github.repository_owner }}/bmg-django
+  IMAGE_PLATFORM: ghcr.io/${{ github.repository_owner }}/bmg-platform
+  PYTHON_VERSION: "3.12"
+  NODE_VERSION: "20"
+
+jobs:
+
+  # ────────────────────────────────────────────
+  # JOB 1 — Django: Lint, type-check, test
+  # ────────────────────────────────────────────
+  django-quality:
+    name: Django — Lint & Test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./backend
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: bmg_test
+          POSTGRES_USER: bmg
+          POSTGRES_PASSWORD: test_password
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7.2-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements/ci.txt
+
+      - name: Lint — flake8
+        run: flake8 . --count --max-line-length=120 --statistics
+
+      - name: Lint — black (check only)
+        run: black --check .
+
+      - name: Lint — isort (check only)
+        run: isort --check-only .
+
+      - name: Type check — mypy
+        run: mypy . --ignore-missing-imports
+
+      - name: Run tests
+        env:
+          DJANGO_SETTINGS_MODULE: config.settings.test
+          DATABASE_URL: postgresql://bmg:test_password@localhost:5432/bmg_test
+          REDIS_URL: redis://localhost:6379/0
+          SECRET_KEY: test-secret-key-not-for-production
+          CELERY_TASK_ALWAYS_EAGER: "True"
+        run: |
+          python manage.py migrate_schemas --shared
+          pytest --cov=. --cov-report=xml --cov-fail-under=80 -v
+
+      - name: Upload coverage report
+        uses: codecov/codecov-action@v4
+        with:
+          file: ./backend/coverage.xml
+          flags: backend
+
+  # ────────────────────────────────────────────
+  # JOB 2 — Next.js Platform: Lint, type, build
+  # ────────────────────────────────────────────
+  platform-quality:
+    name: Platform Frontend — Lint & Build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./frontend/platform
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/platform/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint — ESLint
+        run: npm run lint
+
+      - name: Type check — tsc
+        run: npm run type-check
+
+      - name: Build
+        env:
+          NEXT_PUBLIC_API_URL: https://api.bmg.tn
+          NEXT_PUBLIC_GRAPHQL_URL: https://api.bmg.tn/graphql/
+          NEXT_PUBLIC_CLOUDINARY_CLOUD: ${{ secrets.CLOUDINARY_CLOUD }}
+        run: npm run build
+
+  # ────────────────────────────────────────────
+  # JOB 3 — Security scan
+  # ────────────────────────────────────────────
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    needs: [django-quality, platform-quality]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install bandit + safety
+        run: pip install bandit safety
+
+      - name: Python SAST — bandit
+        run: bandit -r backend/ -ll --exclude backend/tests/
+
+      - name: Python CVE check — safety
+        run: safety check -r backend/requirements/base.txt
+
+      - name: Node audit
+        working-directory: ./frontend/platform
+        run: npm audit --audit-level=high
+
+  # ────────────────────────────────────────────
+  # JOB 4 — Docker build + push to GHCR
+  # Runs only on push (not PRs)
+  # ────────────────────────────────────────────
+  docker-build:
+    name: Docker Build & Push
+    runs-on: ubuntu-latest
+    needs: [security-scan]
+    if: github.event_name == 'push'
+
+    outputs:
+      django_tag: ${{ steps.meta_django.outputs.tags }}
+      platform_tag: ${{ steps.meta_platform.outputs.tags }}
+      sha_short: ${{ steps.vars.outputs.sha_short }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set short SHA
+        id: vars
+        run: echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Django image metadata
+        id: meta_django
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_DJANGO }}
+          tags: |
+            type=sha,prefix=sha-
+            type=ref,event=branch
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+
+      - name: Build & push Django image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile
+          target: production
+          push: true
+          tags: ${{ steps.meta_django.outputs.tags }}
+          labels: ${{ steps.meta_django.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Platform frontend metadata
+        id: meta_platform
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_PLATFORM }}
+          tags: |
+            type=sha,prefix=sha-
+            type=ref,event=branch
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+
+      - name: Build & push Platform image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./frontend/platform
+          file: ./frontend/platform/Dockerfile
+          push: true
+          tags: ${{ steps.meta_platform.outputs.tags }}
+          labels: ${{ steps.meta_platform.outputs.labels }}
+          build-args: |
+            NEXT_PUBLIC_API_URL=${{ secrets.NEXT_PUBLIC_API_URL_PROD }}
+            NEXT_PUBLIC_CLOUDINARY_CLOUD=${{ secrets.CLOUDINARY_CLOUD }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ────────────────────────────────────────────
+  # JOB 5 — Deploy to STAGING (auto on dev)
+  # ────────────────────────────────────────────
+  deploy-staging:
+    name: Deploy → Staging (OVH)
+    runs-on: ubuntu-latest
+    needs: [docker-build]
+    if: github.ref == 'refs/heads/dev' && github.event_name == 'push'
+    environment: staging
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy to OVH Staging via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.OVH_HOST_STAGING }}
+          username: ${{ secrets.OVH_USER }}
+          key: ${{ secrets.OVH_SSH_KEY }}
+          script: |
+            cd /opt/bmg-staging
+            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+            docker compose pull django_api platform_frontend celery_worker celery_beat
+            docker compose up -d --no-deps django_api platform_frontend celery_worker celery_beat
+            docker compose exec -T django_api python manage.py migrate_schemas --shared
+            sleep 5
+            curl -f http://localhost:8000/api/health/ || exit 1
+            echo "✅ Staging deploy complete — sha: ${{ needs.docker-build.outputs.sha_short }}"
+
+      - name: Notify Slack — staging deploy
+        if: always()
+        uses: slackapi/slack-github-action@v1
+        with:
+          payload: |
+            {
+              "text": "${{ job.status == 'success' && '✅' || '❌' }} *Staging deploy* — ${{ github.repository }} @ `${{ needs.docker-build.outputs.sha_short }}`"
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+  # ────────────────────────────────────────────
+  # JOB 6 — Deploy to PRODUCTION (manual gate)
+  # Requires: push to main + manual approval
+  # ────────────────────────────────────────────
+  deploy-production:
+    name: Deploy → Production (OVH) ⚠ Manual approval
+    runs-on: ubuntu-latest
+    needs: [docker-build]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    environment: production  # requires manual approval in GitHub Environments
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy to OVH Production via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.OVH_HOST_PROD }}
+          username: ${{ secrets.OVH_USER }}
+          key: ${{ secrets.OVH_SSH_KEY }}
+          script: |
+            cd /opt/bmg-prod
+            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+            docker compose pull django_api platform_frontend celery_worker celery_beat
+            # Zero-downtime: update workers first, then API
+            docker compose up -d --no-deps celery_worker celery_beat
+            docker compose up -d --no-deps django_api platform_frontend
+            docker compose exec -T django_api python manage.py migrate_schemas --shared
+            sleep 10
+            curl -f http://localhost:8000/api/health/ || (docker compose rollback && exit 1)
+            echo "✅ Production deploy complete — sha: ${{ needs.docker-build.outputs.sha_short }}"
+
+      - name: Create Sentry release
+        uses: getsentry/action-release@v1
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
+          SENTRY_PROJECT: bmg-platform
+        with:
+          version: ${{ needs.docker-build.outputs.sha_short }}
+
+      - name: Notify Slack — production deploy
+        if: always()
+        uses: slackapi/slack-github-action@v1
+        with:
+          payload: |
+            {
+              "text": "${{ job.status == 'success' && '🚀' || '🔴' }} *Production deploy* — ${{ github.repository }} @ `${{ needs.docker-build.outputs.sha_short }}`"
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
