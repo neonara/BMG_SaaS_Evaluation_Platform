@@ -1,48 +1,62 @@
-# syntax=docker/dockerfile:1
+# ═══════════════════════════════════════════════════════════════
+# BMG Backend Dockerfile
+# ═══════════════════════════════════════════════════════════════
 
-# syntax=docker/dockerfile:1
+FROM python:3.12-slim AS base
 
-# Builder: install all deps
-FROM python:3.12-slim AS builder
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
 WORKDIR /app
-COPY requirements/ requirements/
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --no-cache-dir \
-    -r requirements/base.txt \
-    -r requirements/dev.txt \
-    -r requirements/production.txt \
-    -r requirements/test.txt
 
-# Production runtime (used by docker-compose target:production)
-FROM python:3.12-slim AS production
-# Install runtime deps...
+# Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl tini libpq-dev gcc g++ libpq5 \
-    libjpeg62-turbo libwebp7 libtiff6 liblcms2-2 \
-    libgeos-dev libproj-dev && \
-    rm -rf /var/lib/apt/lists/*
+    curl \
+    gcc \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
-COPY --from=builder /usr/local/bin /usr/local/bin
-WORKDIR /app
+# Copy requirements first for better caching
+COPY requirements/ requirements/
+
+# ── production stage ──────────────────────────────────────────
+FROM base AS production
+
+# Install Python dependencies
+RUN pip install --no-cache-dir -r requirements/production.txt
+
+# Copy application code
 COPY . .
 
-# Create appuser first, then create and set ownership for directories
-RUN adduser --disabled-password --gecos '' appuser && \
-    mkdir -p /app/staticfiles && \
-    chown -R appuser:appuser /app /usr/local/lib/python3.12 /usr/local/bin
+# Make sure init script is executable
+RUN chmod +x init_migrations.sh
 
-USER appuser
+# Create non-root user
+RUN addgroup --system django \
+    && adduser --system --ingroup django django \
+    && chown -R django:django /app
 
-# Development stage (mount source)
-FROM python:3.12-slim AS development
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl vim libpq-dev gcc && rm -rf /var/lib/apt/lists/*
-WORKDIR /app
-COPY requirements/ requirements/
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install -r requirements/dev.txt
+# Switch to non-root user
+USER django
+
+EXPOSE 8000
+
+# Use the init script as entrypoint
+ENTRYPOINT ["./init_migrations.sh"]
+
+# ── development stage ─────────────────────────────────────────
+FROM base AS development
+
+# Install development dependencies
+RUN pip install --no-cache-dir -r requirements/dev.txt
+
+# Copy application code
 COPY . .
-RUN adduser --disabled-password --gecos '' appuser  
-USER appuser
+
+# Make sure init script is executable
+RUN chmod +x init_migrations.sh
+
+# Keep container running for development
 CMD ["python", "manage.py", "runserver", "0.0.0.0:8000"]

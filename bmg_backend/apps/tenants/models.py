@@ -35,6 +35,8 @@ class Tenant(TenantMixin):
     auto_create_schema = True
     # Never auto-drop — require explicit DB admin action to drop a schema.
     auto_drop_schema = False
+    created_on = models.DateTimeField(auto_now_add=True)
+
 
     class Meta:
         db_table = "tenants_tenant"

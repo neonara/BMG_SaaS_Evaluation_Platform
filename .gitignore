@@ -1,4 +1,4 @@
-postgres
-rabbitmq
-redis
-.env.prod
+# postgres
+# rabbitmq
+# redis
+# .env.prod

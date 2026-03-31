@@ -1,31 +1,28 @@
-"""Production settings — security hardened."""
+"""Production settings."""
 from config.settings.base import *  # noqa: F401, F403
+import environ as _environ
+
+_env = _environ.Env()
 
 DEBUG = False
 
 # Security headers
 SECURE_HSTS_SECONDS = 31536000
 SECURE_HSTS_INCLUDE_SUBDOMAINS = True
-SECURE_HSTS_PRELOAD = True
-SECURE_SSL_REDIRECT = True
+SECURE_SSL_REDIRECT = _env.bool("SECURE_SSL_REDIRECT", default=False)
 SESSION_COOKIE_SECURE = True
 CSRF_COOKIE_SECURE = True
-SECURE_BROWSER_XSS_FILTER = True
 SECURE_CONTENT_TYPE_NOSNIFF = True
 X_FRAME_OPTIONS = "DENY"
 
-# Sentry
-import sentry_sdk  # noqa: E402
-from sentry_sdk.integrations.django import DjangoIntegration
-from sentry_sdk.integrations.celery import CeleryIntegration
-import environ as _environ
+# Email — support both SSL (port 465) and TLS (port 587)
+EMAIL_USE_SSL = _env.bool("EMAIL_USE_SSL", default=False)
+EMAIL_USE_TLS = _env.bool("EMAIL_USE_TLS", default=True)
 
-_env = _environ.Env()
+# Sentry
 _sentry_dsn = _env("SENTRY_DSN", default="")
 if _sentry_dsn:
-    sentry_sdk.init(
-        dsn=_sentry_dsn,
-        integrations=[DjangoIntegration(), CeleryIntegration()],
-        traces_sample_rate=0.1,
-        send_default_pii=False,
-    )
+    import sentry_sdk
+    from sentry_sdk.integrations.django import DjangoIntegration
+    sentry_sdk.init(dsn=_sentry_dsn, integrations=[DjangoIntegration()],
+                    traces_sample_rate=0.1, send_default_pii=False)

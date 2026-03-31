@@ -72,8 +72,8 @@ services:
       target: production
     container_name: bmg_django
     restart: unless-stopped
-    expose:
-      - "8000"
+    ports:  
+      - "8000:8000" 
     volumes:
       - static_files:/app/staticfiles
       # - ./bmg_backend:/app:ro   # uncomment in dev only
@@ -92,23 +92,14 @@ services:
       - frontend_net
       - backend_net
       - data_net
-    command: >
-      sh -c "python manage.py migrate_schemas --shared &&
-             python manage.py collectstatic --noinput &&
-             gunicorn config.wsgi:application
-               --bind 0.0.0.0:8000
-               --workers 4
-               --worker-class gthread
-               --threads 2
-               --timeout 120
-               --access-logfile -
-               --error-logfile -"
+    entrypoint: ["./entrypoint.sh"]  # ← ADD THIS to use the entrypoint script
+    command: ["gunicorn", "config.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "2", "--worker-class", "gthread", "--threads", "2",  "--timeout", "120", "--access-logfile", "-", "--error-logfile", "-"]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/api/health/"]
       interval: 30s
       timeout: 10s
       retries: 5
-      start_period: 40s
+      start_period: 60s
 
   # ──────────────────────────────────────────────
   # NEXT.JS PLATFORM — Dashboard frontend
