@@ -1,6 +1,6 @@
 postgres
 rabbitmq
 redis
+.env.test
 .env.prod
 .env
-.env.test
