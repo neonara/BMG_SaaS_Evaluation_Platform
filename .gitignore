@@ -2,3 +2,4 @@ postgres
 rabbitmq
 redis
 .env.prod
+.env
