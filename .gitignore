@@ -3,3 +3,4 @@ rabbitmq
 redis
 .env.prod
 .env
+.env.test
