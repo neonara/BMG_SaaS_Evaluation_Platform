@@ -11,7 +11,11 @@ class RBACMiddleware:
         "/api/health/",
         "/api/auth/token/",
         "/api/auth/token/refresh/",
+        "/api/auth/",
         "/api/public/",
+        "/api/schema/",
+        "/api/docs/",
+        "/api/redoc/", 
         "/reports/",   # public shareable reports
         "/graphql/",   # GraphQL has its own permission layer
         "/bmg-admin/",

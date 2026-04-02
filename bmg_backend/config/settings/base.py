@@ -1,16 +1,11 @@
 """
 Base settings — shared by all environments.
-Never import this directly; use development.py, production.py, or test.py.
 """
 from pathlib import Path
 import environ
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
-# ── Environment loading ───────────────────────────────────────
-# Read from .env if it exists (local dev).
-# In Docker, variables come from env_file / environment in compose —
-# read_env is a no-op if the file doesn't exist.
 env = environ.Env(
     DEBUG=(bool, False),
     ALLOWED_HOSTS=(list, ["localhost", "127.0.0.1"]),
@@ -19,25 +14,29 @@ _env_file = BASE_DIR / ".env"
 if _env_file.exists():
     environ.Env.read_env(_env_file)
 
-SECRET_KEY   = env("SECRET_KEY")
-DEBUG        = env("DEBUG")
+SECRET_KEY    = env("SECRET_KEY")
+DEBUG         = env("DEBUG")
 ALLOWED_HOSTS = env("ALLOWED_HOSTS")
 
 # ── django-tenants ────────────────────────────────────────────
 DATABASE_ROUTERS = ["django_tenants.routers.TenantSyncRouter"]
 
-# SHARED_APPS: live in the public schema, migrated with --shared
-# Order matters: django_tenants → contenttypes → auth → ... → admin
+# KEY FIX: When no tenant domain matches the request host,
+# serve the PUBLIC schema instead of returning 404.
+# Required for: health checks, admin, public API endpoints.
+SHOW_PUBLIC_IF_NO_TENANT_FOUND = True
+
 SHARED_APPS = [
-    "django_tenants",                       # MUST be first
-    "django.contrib.contenttypes",          # required by auth
+    "django_tenants",
+    "django.contrib.contenttypes",
     "django.contrib.auth",
     "django.contrib.sessions",
     "django.contrib.staticfiles",
-    "django.contrib.admin",                 # after auth + contenttypes
-    "django.contrib.messages",              # after sessions
-    # Third-party
+    "django.contrib.admin",
+    "django.contrib.messages",
     "rest_framework",
+    "drf_spectacular",
+    "drf_spectacular_sidecar",
     "corsheaders",
     "django_filters",
     "django_celery_beat",
@@ -45,15 +44,15 @@ SHARED_APPS = [
     "graphene_django",
     # BMG shared apps
     "apps.tenants",
-   # "apps.audit",
-    "apps.users",
-    "core.health",
+    "apps.audit",
+    "core.health"
 ]
 
-# TENANT_APPS: live in each tenant schema, migrated without --shared
+# users lives in TENANT schema only — NOT in SHARED_APPS
 TENANT_APPS = [
     "django.contrib.contenttypes",
-    "django.contrib.auth"
+    "django.contrib.auth",
+    "apps.users",
 ]
 
 INSTALLED_APPS = list(SHARED_APPS) + [
@@ -65,7 +64,7 @@ TENANT_DOMAIN_MODEL = "tenants.Domain"
 
 # ── Middleware ────────────────────────────────────────────────
 MIDDLEWARE = [
-    "django_tenants.middleware.main.TenantMainMiddleware",  # MUST be first
+    "django_tenants.middleware.main.TenantMainMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
     "corsheaders.middleware.CorsMiddleware",
@@ -100,9 +99,7 @@ TEMPLATES = [
 ]
 
 # ── Database ──────────────────────────────────────────────────
-DATABASES = {
-    "default": env.db("DATABASE_URL"),
-}
+DATABASES = {"default": env.db("DATABASE_URL")}
 DATABASES["default"]["ENGINE"] = "django_tenants.postgresql_backend"
 
 # ── Cache ─────────────────────────────────────────────────────
@@ -118,16 +115,22 @@ CACHES = {
 
 # ── Auth ──────────────────────────────────────────────────────
 AUTH_USER_MODEL = "users.User"
-
 AUTHENTICATION_BACKENDS = ["django.contrib.auth.backends.ModelBackend"]
-
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
     {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator"},
     {"NAME": "django.contrib.auth.password_validation.CommonPasswordValidator"},
     {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},
 ]
-
+# ── API Docs ──────────────────────────────────────────────────
+SPECTACULAR_SETTINGS = {
+    "TITLE": "BMG Platform API",
+    "VERSION": "1.0.0",
+    "SERVE_PERMISSIONS": ["rest_framework.permissions.AllowAny"],
+    "SWAGGER_UI_DIST": "SIDECAR",
+    "SWAGGER_UI_FAVICON_HREF": "SIDECAR",
+    "REDOC_DIST": "SIDECAR",
+}
 # ── REST Framework ────────────────────────────────────────────
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
@@ -138,6 +141,7 @@ REST_FRAMEWORK = {
     ],
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
     "PAGE_SIZE": 20,
+    "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
     "DEFAULT_FILTER_BACKENDS": [
         "django_filters.rest_framework.DjangoFilterBackend",
         "rest_framework.filters.SearchFilter",
@@ -163,24 +167,21 @@ SIMPLE_JWT = {
 }
 
 # ── GraphQL ───────────────────────────────────────────────────
-GRAPHENE = {
-    "SCHEMA": "config.schema.schema",
-}
-
+GRAPHENE = {"SCHEMA": "config.schema.schema", "MIDDLEWARE": []}
 # ── Celery ────────────────────────────────────────────────────
-CELERY_BROKER_URL          = env("RABBITMQ_URL", default="amqp://guest:guest@rabbitmq:5672/")
-CELERY_RESULT_BACKEND      = env("REDIS_URL",    default="redis://redis:6379/0")
-CELERY_ACCEPT_CONTENT      = ["json"]
-CELERY_TASK_SERIALIZER     = "json"
-CELERY_RESULT_SERIALIZER   = "json"
-CELERY_TIMEZONE            = "Africa/Tunis"
-CELERY_BEAT_SCHEDULER      = "django_celery_beat.schedulers:DatabaseScheduler"
+CELERY_BROKER_URL        = env("RABBITMQ_URL", default="amqp://guest:guest@rabbitmq:5672/")
+CELERY_RESULT_BACKEND    = env("REDIS_URL",    default="redis://redis:6379/0")
+CELERY_ACCEPT_CONTENT    = ["json"]
+CELERY_TASK_SERIALIZER   = "json"
+CELERY_RESULT_SERIALIZER = "json"
+CELERY_TIMEZONE          = "Africa/Tunis"
+CELERY_BEAT_SCHEDULER    = "django_celery_beat.schedulers:DatabaseScheduler"
 CELERY_TASK_ROUTES = {
-    "apps.attempts.tasks.*":     {"queue": "scoring"},
-    "apps.results.tasks.*":      {"queue": "pdf"},
-    "apps.notifications.tasks.*":{"queue": "notif"},
-    "apps.users.tasks.*":        {"queue": "email"},
-    "*":                         {"queue": "default"},
+    "apps.attempts.tasks.*":      {"queue": "scoring"},
+    "apps.results.tasks.*":       {"queue": "pdf"},
+    "apps.notifications.tasks.*": {"queue": "notif"},
+    "apps.users.tasks.*":         {"queue": "email"},
+    "*":                          {"queue": "default"},
 }
 
 # ── Email ─────────────────────────────────────────────────────
@@ -208,7 +209,6 @@ STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
 
 # ── i18n ─────────────────────────────────────────────────────
 LANGUAGE_CODE = "en-us"
-LANGUAGES     = [("en", "English"), ("fr", "French"), ("ar", "Arabic")]
 TIME_ZONE     = "Africa/Tunis"
 USE_I18N      = True
 USE_TZ        = True

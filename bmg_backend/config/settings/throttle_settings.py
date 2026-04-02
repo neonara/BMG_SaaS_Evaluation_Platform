@@ -53,6 +53,7 @@ DEFAULT_THROTTLE_RATES = {
     "external_candidate":   "60/min",
 
     # Anonymous: Vitrine visitors, unauthenticated pack catalogue
+    "anon":                 "120/min",
     "anon_public":          "120/min",
 
     # ── Special endpoints ─────────────────────────────────────────────────────

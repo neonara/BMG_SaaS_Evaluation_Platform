@@ -1,62 +1,62 @@
-# ═══════════════════════════════════════════════════════════════
-# BMG Backend Dockerfile
-# ═══════════════════════════════════════════════════════════════
-
 FROM python:3.12-slim AS base
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+    PIP_NO_CACHE_DIR=1
 
 WORKDIR /app
 
-# Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl \
-    gcc \
-    libpq-dev \
+    curl gcc libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements first for better caching
 COPY requirements/ requirements/
 
-# ── production stage ──────────────────────────────────────────
+# ── production ────────────────────────────────────────────────
 FROM base AS production
 
-# Install Python dependencies
-RUN pip install --no-cache-dir -r requirements/production.txt
+RUN pip install -r requirements/production.txt
 
-# Copy application code
 COPY . .
 
-# Make sure init script is executable
-RUN chmod +x init_migrations.sh
+RUN chmod +x entrypoint.sh
 
-# Create non-root user
 RUN addgroup --system django \
     && adduser --system --ingroup django django \
     && chown -R django:django /app
 
-# Switch to non-root user
 USER django
-
 EXPOSE 8000
 
-# Use the init script as entrypoint
-ENTRYPOINT ["./init_migrations.sh"]
+ENTRYPOINT ["./entrypoint.sh"]
+CMD ["gunicorn", "config.wsgi:application", \
+    "--bind", "0.0.0.0:8000", \
+    "--workers", "4", \
+    "--worker-class", "gthread", \
+    "--threads", "2", \
+    "--timeout", "120", \
+    "--access-logfile", "-", \
+    "--error-logfile", "-"]
 
-# ── development stage ─────────────────────────────────────────
+# ── development ───────────────────────────────────────────────
 FROM base AS development
 
-# Install development dependencies
-RUN pip install --no-cache-dir -r requirements/dev.txt
+RUN pip install -r requirements/dev.txt
 
-# Copy application code
+COPY . .
+RUN chmod +x entrypoint.sh
+
+ENTRYPOINT ["./entrypoint.sh"]
+CMD ["python", "manage.py", "runserver", "0.0.0.0:8000"]
+
+# ── test ──────────────────────────────────────────────────────
+FROM base AS test
+
+RUN pip install -r requirements/dev.txt
+
 COPY . .
 
-# Make sure init script is executable
-RUN chmod +x init_migrations.sh
+ENV DJANGO_SETTINGS_MODULE=config.settings.test
 
-# Keep container running for development
-CMD ["python", "manage.py", "runserver", "0.0.0.0:8000"]
+ENTRYPOINT []
+CMD ["python", "-m", "pytest", "--tb=short", "-q"]

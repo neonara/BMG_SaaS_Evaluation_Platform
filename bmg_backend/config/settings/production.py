@@ -4,7 +4,7 @@ import environ as _environ
 
 _env = _environ.Env()
 
-DEBUG = False
+DEBUG = True
 
 # Security headers
 SECURE_HSTS_SECONDS = 31536000
