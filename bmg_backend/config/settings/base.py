@@ -44,6 +44,7 @@ SHARED_APPS = [
     "graphene_django",
     # BMG shared apps
     "apps.tenants",
+    "apps.social_accounts",
     "apps.audit",
     "core.health"
 ]
@@ -53,7 +54,6 @@ TENANT_APPS = [
     "django.contrib.contenttypes",
     "django.contrib.auth",
     "apps.users",
-    "apps.social_accounts",
     "apps.multi_language",
 ]
 

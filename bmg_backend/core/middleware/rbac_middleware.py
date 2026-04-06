@@ -12,6 +12,7 @@ class RBACMiddleware:
         "/api/auth/token/",
         "/api/auth/token/refresh/",
         "/api/auth/",
+        "/api/v1/auth/social/",
         "/api/public/",
         "/api/schema/",
         "/api/docs/",
@@ -19,6 +20,7 @@ class RBACMiddleware:
         "/reports/",   # public shareable reports
         "/graphql/",   # GraphQL has its own permission layer
         "/bmg-admin/",
+        "/favicon.ico",
     ]
 
     def __init__(self, get_response):

@@ -5,7 +5,7 @@
 # ── Environment files ─────────────────────────────────────────────
 .env
 .env.*
-!.env.example          # KEEP the example — never keep real values
+.env.example          # KEEP the example — never keep real values
 *.env
 
 # ── Python ────────────────────────────────────────────────────────

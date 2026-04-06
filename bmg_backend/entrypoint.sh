@@ -15,7 +15,7 @@ python manage.py makemigrations audit   --noinput 2>/dev/null || true
 # Run ALL shared migrations at once (public schema)
 # This covers: contenttypes, auth, sessions, admin, tenants, celery_beat, etc.
 echo "--- migrate_schemas --shared ---"
-python manage.py migrate_schemas --shared --noinput
+python manage.py migrate_schemas --shared --fake-initial --noinput
 
 echo "--- collectstatic ---"
 python manage.py collectstatic --noinput --clear 2>/dev/null || python manage.py collectstatic --noinput

@@ -1,19 +1,8 @@
 """
 apps/social_accounts/views.py
-
-OAuth 2.0 flow for Google and LinkedIn.
-Uses httpx (already in requirements) — no heavy allauth dependency.
-
-Flow:
-  1. Frontend calls GET /api/v1/auth/social/{provider}/login/
-     → returns {"auth_url": "https://accounts.google.com/o/oauth2/..."}
-  2. User is redirected there, authenticates, provider calls:
-     GET /api/v1/auth/social/{provider}/callback/?code=xxx&state=yyy
-     → returns JWT access + refresh tokens
 """
 from __future__ import annotations
 
-import hashlib
 import secrets
 import urllib.parse
 from typing import Any
@@ -33,8 +22,6 @@ from core.permissions.roles import Role
 from .models import SocialAccount
 from .serializers import OAuthCallbackSerializer, SocialLoginResponseSerializer
 
-
-# ── Provider configs ──────────────────────────────────────────────────────────
 
 def _google_config() -> dict:
     return {
@@ -73,11 +60,8 @@ def _get_config(provider: str) -> dict:
     return factory()
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
-
 def _build_auth_url(provider: str) -> tuple[str, str]:
-    """Return (auth_url, state) for the given provider."""
-    cfg   = _get_config(provider)
+    cfg = _get_config(provider)
     state = secrets.token_urlsafe(32)
     params = {
         "client_id":     cfg["client_id"],
@@ -85,7 +69,7 @@ def _build_auth_url(provider: str) -> tuple[str, str]:
         "response_type": "code",
         "scope":         cfg["scope"],
         "state":         state,
-        "access_type":   "offline",  # Google refresh token
+        "access_type":   "offline",
         "prompt":        "select_account",
     }
     url = cfg["auth_url"] + "?" + urllib.parse.urlencode(params)
@@ -93,15 +77,14 @@ def _build_auth_url(provider: str) -> tuple[str, str]:
 
 
 def _exchange_code(provider: str, code: str) -> dict:
-    """Exchange authorization code for tokens. Returns token response dict."""
     cfg = _get_config(provider)
     resp = httpx.post(
         cfg["token_url"],
         data={
-            "grant_type":    "authorization_code",
-            "code":          code,
-            "redirect_uri":  cfg["redirect_uri"],
-            "client_id":     cfg["client_id"],
+            "grant_type":   "authorization_code",
+            "code":         code,
+            "redirect_uri": cfg["redirect_uri"],
+            "client_id":    cfg["client_id"],
             "client_secret": cfg["client_secret"],
         },
         timeout=10,
@@ -111,8 +94,7 @@ def _exchange_code(provider: str, code: str) -> dict:
 
 
 def _fetch_userinfo(provider: str, access_token: str) -> dict:
-    """Fetch user profile from provider."""
-    cfg  = _get_config(provider)
+    cfg = _get_config(provider)
     resp = httpx.get(
         cfg["userinfo_url"],
         headers={"Authorization": f"Bearer {access_token}"},
@@ -123,21 +105,16 @@ def _fetch_userinfo(provider: str, access_token: str) -> dict:
 
 
 def _get_or_create_user(provider: str, userinfo: dict, token_data: dict) -> tuple[User, bool]:
-    """
-    Find existing SocialAccount, or create User + SocialAccount.
-    Returns (user, is_new).
-    """
-    uid   = str(userinfo.get("sub") or userinfo.get("id"))
+    uid = str(userinfo.get("sub") or userinfo.get("id"))
     email = userinfo.get("email", "").lower()
 
     with transaction.atomic():
-        # 1. Try to find existing social account
         try:
             sa = SocialAccount.objects.select_related("user").get(provider=provider, uid=uid)
             sa.update_tokens(
-                access_token  = token_data.get("access_token", ""),
-                refresh_token = token_data.get("refresh_token", ""),
-                expires_in    = token_data.get("expires_in"),
+                access_token=token_data.get("access_token", ""),
+                refresh_token=token_data.get("refresh_token", ""),
+                expires_in=token_data.get("expires_in"),
             )
             sa.extra_data = userinfo
             sa.save(update_fields=["extra_data", "updated_at"])
@@ -145,29 +122,28 @@ def _get_or_create_user(provider: str, userinfo: dict, token_data: dict) -> tupl
         except SocialAccount.DoesNotExist:
             pass
 
-        # 2. Try to link to existing user by email (account linking)
         is_new = False
         try:
             user = User.objects.get(email=email)
         except User.DoesNotExist:
-            # 3. Create new user from provider profile
+            name = userinfo.get("given_name") or userinfo.get("name") or ""
             user = User.objects.create_user(
-                email      = email,
-                password   = None,               # no password — social-only
-                first_name = userinfo.get("given_name", userinfo.get("name", "")).split()[0] if userinfo.get("given_name") or userinfo.get("name") else "",
-                last_name  = userinfo.get("family_name", ""),
-                role       = Role.EXTERNAL_CANDIDATE.value,
-                status     = "active",
+                email=email,
+                password=None,
+                first_name=name.split()[0] if name else "",
+                last_name=userinfo.get("family_name", ""),
+                role=Role.EXTERNAL_CANDIDATE.value,
+                status="active",
             )
             is_new = True
 
         SocialAccount.objects.create(
-            user          = user,
-            provider      = provider,
-            uid           = uid,
-            access_token  = token_data.get("access_token", ""),
-            refresh_token = token_data.get("refresh_token", ""),
-            extra_data    = userinfo,
+            user=user,
+            provider=provider,
+            uid=uid,
+            access_token=token_data.get("access_token", ""),
+            refresh_token=token_data.get("refresh_token", ""),
+            extra_data=userinfo,
         )
         return user, is_new
 
@@ -175,18 +151,12 @@ def _get_or_create_user(provider: str, userinfo: dict, token_data: dict) -> tupl
 def _jwt_for_user(user: User) -> dict:
     refresh = RefreshToken.for_user(user)
     return {
-        "access":  str(refresh.access_token),
+        "access": str(refresh.access_token),
         "refresh": str(refresh),
     }
 
 
-# ── Views ─────────────────────────────────────────────────────────────────────
-
 class SocialLoginInitView(APIView):
-    """
-    GET /api/v1/auth/social/{provider}/login/
-    Returns the URL the frontend should redirect the user to.
-    """
     permission_classes = [AllowAny]
 
     def get(self, request: Request, provider: str) -> Response:
@@ -200,20 +170,14 @@ class SocialLoginInitView(APIView):
             auth_url, state = _build_auth_url(provider)
         except AttributeError:
             return Response(
-                {"error": f"Provider '{provider}' is not configured. Check SOCIAL_AUTH settings."},
+                {"error": f"Provider '{provider}' is not configured."},
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
-        # Store state in session to validate on callback (CSRF protection)
         request.session[f"oauth_state_{provider}"] = state
         return Response({"auth_url": auth_url, "state": state})
 
 
 class SocialCallbackView(APIView):
-    """
-    GET /api/v1/auth/social/{provider}/callback/?code=xxx&state=yyy
-    Called by the OAuth provider after user authenticates.
-    Returns JWT tokens.
-    """
     permission_classes = [AllowAny]
 
     def get(self, request: Request, provider: str) -> Response:
@@ -228,10 +192,9 @@ class SocialCallbackView(APIView):
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-        code  = serializer.validated_data["code"]
+        code = serializer.validated_data["code"]
         state = serializer.validated_data["state"]
 
-        # Validate state (CSRF protection)
         expected_state = request.session.get(f"oauth_state_{provider}", "")
         if expected_state and state and expected_state != state:
             return Response(
@@ -241,7 +204,7 @@ class SocialCallbackView(APIView):
 
         try:
             token_data = _exchange_code(provider, code)
-            userinfo   = _fetch_userinfo(provider, token_data["access_token"])
+            userinfo = _fetch_userinfo(provider, token_data["access_token"])
             user, is_new = _get_or_create_user(provider, userinfo, token_data)
         except httpx.HTTPStatusError as e:
             return Response(
@@ -268,8 +231,8 @@ class SocialCallbackView(APIView):
         jwt = _jwt_for_user(user)
         response_data = {
             **jwt,
-            "user_id":        user.id,
-            "email":          user.email,
+            "user_id": user.id,
+            "email": user.email,
             "is_new_account": is_new,
         }
         out = SocialLoginResponseSerializer(data=response_data)
@@ -278,11 +241,6 @@ class SocialCallbackView(APIView):
 
 
 class SocialAccountListView(APIView):
-    """
-    GET /api/v1/auth/social/accounts/
-    Lists the social accounts linked to the authenticated user.
-    """
-
     def get(self, request: Request) -> Response:
         from .serializers import SocialAccountSerializer
         accounts = SocialAccount.objects.filter(user=request.user)
@@ -290,17 +248,10 @@ class SocialAccountListView(APIView):
 
 
 class SocialAccountDisconnectView(APIView):
-    """
-    DELETE /api/v1/auth/social/accounts/{provider}/
-    Unlinks a social provider from the user's account.
-    Requires the user to have a password set (otherwise they'd lose all login methods).
-    """
-
     def delete(self, request: Request, provider: str) -> Response:
         provider = provider.lower()
-        user     = request.user
+        user = request.user
 
-        # Safety: don't allow disconnect if no password and only 1 social account
         if not user.has_usable_password():
             count = SocialAccount.objects.filter(user=user).count()
             if count <= 1:
