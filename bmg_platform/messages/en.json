@@ -44,7 +44,12 @@
     "continueWithLinkedIn": "Continue with LinkedIn",
     "passwordResetEmailSent": "If an account exists, a reset link has been sent.",
     "passwordMismatch": "Passwords do not match",
-    "passwordTooShort": "Password must be at least 8 characters"
+    "passwordTooShort": "Password must be at least 8 characters",
+    "registerVerifyEmail": "Verify your email",
+    "registerOtpDescription": "We sent a 6-digit verification code to {email}",
+    "sendingCode": "Sending code...",
+    "verifyAndCreate": "Verify & Create Account",
+    "backToForm": "Back to form"
   },
   "nav": {
     "dashboard": "Dashboard",

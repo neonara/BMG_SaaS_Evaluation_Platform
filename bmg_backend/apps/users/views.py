@@ -22,6 +22,7 @@ from apps.users.serializers import (
     OTPVerifySerializer,
     PasswordResetConfirmSerializer,
     PasswordResetRequestSerializer,
+    RegisterExternalSendOTPSerializer,
     RegisterExternalSerializer,
     RegisterInternalSerializer,
     UserAdminSerializer,
@@ -111,20 +112,68 @@ class LogoutView(APIView):
 
 @extend_schema(
     tags=["Auth"],
+    summary="Send registration OTP (external candidate)",
+    description=(
+        "Step 1 of B2C self-registration. Validates that the email is not taken, "
+        "then sends a 6-digit OTP to that address. The OTP expires in 5 minutes."
+    ),
+    request=RegisterExternalSendOTPSerializer,
+    responses={
+        200: OpenApiResponse(description="OTP sent to the provided email."),
+        400: OpenApiResponse(description="Validation error (email taken or invalid)."),
+    },
+)
+class RegisterExternalSendOTPView(APIView):
+    """POST /api/auth/register/send-otp/ — email verification before account creation."""
+    permission_classes = [AllowAny]
+    throttle_classes = [OTPVerifyThrottle]
+
+    def post(self, request):
+        serializer = RegisterExternalSendOTPSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        email = serializer.validated_data["email"]
+
+        from apps.users.otp import generate_and_store
+        otp_code = generate_and_store(email)
+        from apps.users.tasks import send_otp_to_email
+        send_otp_to_email.delay(email=email, otp_code=otp_code)
+
+        return Response(
+            {"detail": f"A verification code has been sent to {email}. It expires in 5 minutes."},
+            status=status.HTTP_200_OK,
+        )
+
+
+@extend_schema(
+    tags=["Auth"],
     summary="Register external candidate",
-    description="B2C self-registration. Creates an active account immediately.",
+    description=(
+        "Step 2 of B2C self-registration. Verifies the OTP sent to the candidate's "
+        "email, then creates an active account."
+    ),
     responses={
         201: UserPublicSerializer,
-        400: OpenApiResponse(description="Validation error."),
+        400: OpenApiResponse(description="Validation error or invalid OTP."),
     },
 )
 class RegisterExternalView(APIView):
-    """POST /api/auth/register/ — B2C external candidate registration."""
+    """POST /api/auth/register/ — B2C external candidate registration (requires valid OTP)."""
     permission_classes = [AllowAny]
 
     def post(self, request):
         serializer = RegisterExternalSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+
+        email = serializer.validated_data["email"]
+        otp_code = serializer.validated_data["otp_code"]
+
+        from apps.users.otp import verify
+        if not verify(email, otp_code):
+            return Response(
+                {"error": True, "status_code": 400, "detail": "Invalid or expired verification code."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         user = serializer.save()
         from apps.notifications.tasks import send_notification
         send_notification.delay(

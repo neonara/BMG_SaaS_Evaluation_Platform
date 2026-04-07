@@ -44,7 +44,12 @@
     "continueWithLinkedIn": "المتابعة مع LinkedIn",
     "passwordResetEmailSent": "إذا كان الحساب موجودًا، فقد تم إرسال رابط الاسترداد.",
     "passwordMismatch": "كلمتا المرور غير متطابقتين",
-    "passwordTooShort": "يجب أن تكون كلمة المرور 8 أحرف على الأقل"
+    "passwordTooShort": "يجب أن تكون كلمة المرور 8 أحرف على الأقل",
+    "registerVerifyEmail": "تحقق من بريدك الإلكتروني",
+    "registerOtpDescription": "أرسلنا رمز تحقق مكونًا من 6 أرقام إلى {email}",
+    "sendingCode": "جاري إرسال الرمز...",
+    "verifyAndCreate": "تحقق وأنشئ الحساب",
+    "backToForm": "العودة إلى النموذج"
   },
   "nav": {
     "dashboard": "لوحة التحكم",

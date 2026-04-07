@@ -30,6 +30,22 @@ def send_otp_email(self, user_id: str, otp_code: str) -> None:
     logger.info("OTP email sent to %s", user.email)
 
 
+@shared_task(bind=True, name="apps.users.tasks.send_otp_to_email", queue="email")
+def send_otp_to_email(self, email: str, otp_code: str) -> None:
+    """Send an OTP code directly to an email address (no user record required).
+
+    Used for external-candidate pre-registration email verification.
+    """
+    body = "Your verification code is: %s\n\nThis code expires in 5 minutes." % otp_code
+    send_mail(
+        subject="BMG Platform — Your verification code",
+        message=body,
+        from_email=settings.DEFAULT_FROM_EMAIL,
+        recipient_list=[email],
+    )
+    logger.info("Pre-registration OTP email sent to %s", email)
+
+
 @shared_task(bind=True, name="apps.users.tasks.send_password_reset_email", queue="email")
 def send_password_reset_email(self, user_id: str) -> None:
     from apps.users.models import User

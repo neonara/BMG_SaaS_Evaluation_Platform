@@ -161,12 +161,27 @@ class InviteSerializer(serializers.Serializer):
 
 # ── Auth serializers ──────────────────────────────────────────────────────────
 
+class RegisterExternalSendOTPSerializer(serializers.Serializer):
+    """Step 1 of external-candidate registration: validate the email and send OTP."""
+
+    email = serializers.EmailField()
+
+    def validate_email(self, value: str) -> str:
+        if User.objects.filter(email=value).exists():
+            raise serializers.ValidationError("An account with this email already exists.")
+        return value
+
+
 class RegisterExternalSerializer(serializers.Serializer):
     email = serializers.EmailField()
     password = serializers.CharField(min_length=8, write_only=True)
     password_confirm = serializers.CharField(write_only=True)
     first_name = serializers.CharField(max_length=150)
     last_name = serializers.CharField(max_length=150)
+    otp_code = serializers.RegexField(
+        regex=r"^[0-9]{6}$",
+        error_messages={"invalid": "OTP must be exactly 6 digits."},
+    )
 
     def validate_email(self, value: str) -> str:
         if User.objects.filter(email=value).exists():
@@ -180,6 +195,7 @@ class RegisterExternalSerializer(serializers.Serializer):
 
     def create(self, validated_data: dict) -> User:
         validated_data.pop("password_confirm")
+        validated_data.pop("otp_code")
         return User.objects.create_user(
             email=validated_data["email"],
             password=validated_data["password"],

@@ -5,57 +5,136 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { useRouter } from "@/lib/i18n/routing";
 import { useTranslations } from "next-intl";
-import { useState } from "react";
+import { useRef, useState, type ChangeEvent, type KeyboardEvent } from "react";
 
-const schema = z.object({
-  email: z.string().email(),
-  password: z.string().min(8),
-  password_confirm: z.string(),
-  first_name: z.string().min(1),
-  last_name: z.string().min(1),
-}).refine((d) => d.password === d.password_confirm, {
-  message: "Passwords do not match",
-  path: ["password_confirm"],
-});
+const schema = z
+  .object({
+    email: z.string().email(),
+    password: z.string().min(8),
+    password_confirm: z.string(),
+    first_name: z.string().min(1),
+    last_name: z.string().min(1),
+  })
+  .refine((d) => d.password === d.password_confirm, {
+    message: "Passwords do not match",
+    path: ["password_confirm"],
+  });
 type FormData = z.infer<typeof schema>;
 
-export function RegisterForm({ locale }: { locale: string }) {
+export function RegisterForm({ locale: _locale }: { locale: string }) {
   const t = useTranslations("auth");
   const router = useRouter();
   const [serverError, setServerError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
 
-  const { register, handleSubmit, formState: { errors, isSubmitting } } = useForm<FormData>({
-    resolver: zodResolver(schema),
-  });
+  // Step 1 = registration form, Step 2 = OTP entry
+  const [step, setStep] = useState<1 | 2>(1);
+  const [formSnapshot, setFormSnapshot] = useState<FormData | null>(null);
 
-  async function onSubmit(data: FormData) {
+  // OTP digit state
+  const [digits, setDigits] = useState(["", "", "", "", "", ""]);
+  const otpRefs = useRef<(HTMLInputElement | null)[]>([]);
+
+  const {
+    register,
+    handleSubmit,
+    formState: { errors, isSubmitting },
+  } = useForm<FormData>({ resolver: zodResolver(schema) });
+
+  // ── Step 1: validate form + send OTP ────────────────────────────────────────
+  async function onSubmitStep1(data: FormData) {
     setServerError(null);
     try {
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/auth/register/`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(data),
-      });
-
+      const res = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL}/api/auth/register/send-otp/`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: data.email }),
+        }
+      );
       if (!res.ok) {
         const body = await res.json();
-        setServerError(JSON.stringify(body.detail));
+        const detail = body?.email?.[0] ?? body?.detail ?? "Failed to send code.";
+        setServerError(typeof detail === "string" ? detail : JSON.stringify(detail));
         return;
       }
-      setSuccess(true);
-      setTimeout(() => router.push(`/${locale}/login`), 2000);
+      setFormSnapshot(data);
+      setDigits(["", "", "", "", "", ""]);
+      setStep(2);
     } catch {
       setServerError("Network error. Please try again.");
     }
   }
 
+  // ── Step 2: verify OTP + create account ─────────────────────────────────────
+  async function onSubmitStep2() {
+    const code = digits.join("");
+    if (code.length !== 6 || !formSnapshot) return;
+    setServerError(null);
+    try {
+      const res = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL}/api/auth/register/`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            email: formSnapshot.email,
+            password: formSnapshot.password,
+            password_confirm: formSnapshot.password_confirm,
+            first_name: formSnapshot.first_name,
+            last_name: formSnapshot.last_name,
+            otp_code: code,
+          }),
+        }
+      );
+      if (!res.ok) {
+        const body = await res.json();
+        const detail = body?.detail ?? body?.otp_code?.[0] ?? "Verification failed.";
+        setServerError(typeof detail === "string" ? detail : JSON.stringify(detail));
+        setDigits(["", "", "", "", "", ""]);
+        otpRefs.current[0]?.focus();
+        return;
+      }
+      setSuccess(true);
+      setTimeout(() => router.push("/login"), 2000);
+    } catch {
+      setServerError("Network error. Please try again.");
+    }
+  }
+
+  // ── OTP input handlers ───────────────────────────────────────────────────────
+  function handleDigitChange(index: number, e: ChangeEvent<HTMLInputElement>) {
+    const val = e.target.value.replace(/\D/g, "").slice(-1);
+    const next = [...digits];
+    next[index] = val;
+    setDigits(next);
+    if (val && index < 5) otpRefs.current[index + 1]?.focus();
+  }
+
+  function handleDigitKeyDown(index: number, e: KeyboardEvent<HTMLInputElement>) {
+    if (e.key === "Backspace" && !digits[index] && index > 0) {
+      otpRefs.current[index - 1]?.focus();
+    }
+  }
+
+  // ── Success screen ───────────────────────────────────────────────────────────
   if (success) {
     return (
       <div className="card p-6 text-center">
         <div className="w-12 h-12 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-3">
-          <svg className="w-6 h-6 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+          <svg
+            className="w-6 h-6 text-green-600"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M5 13l4 4L19 7"
+            />
           </svg>
         </div>
         <p className="font-medium text-gray-900">Account created!</p>
@@ -64,9 +143,90 @@ export function RegisterForm({ locale }: { locale: string }) {
     );
   }
 
+  // ── Step 2: OTP entry ────────────────────────────────────────────────────────
+  if (step === 2 && formSnapshot) {
+    const codeComplete = digits.join("").length === 6;
+    return (
+      <div className="card p-6">
+        <div className="text-center mb-6">
+          <div className="w-12 h-12 bg-blue-50 rounded-full flex items-center justify-center mx-auto mb-3">
+            <svg
+              className="w-6 h-6 text-blue-600"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"
+              />
+            </svg>
+          </div>
+          <h2 className="text-lg font-semibold text-gray-900">
+            {t("registerVerifyEmail")}
+          </h2>
+          <p className="text-sm text-gray-500 mt-1">
+            {t("registerOtpDescription", { email: formSnapshot.email })}
+          </p>
+        </div>
+
+        {serverError && (
+          <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
+            {serverError}
+          </div>
+        )}
+
+        <div className="flex gap-2 justify-center mb-6" dir="ltr">
+          {digits.map((d, i) => (
+            <input
+              key={i}
+              ref={(el) => {
+                otpRefs.current[i] = el;
+              }}
+              type="text"
+              inputMode="numeric"
+              maxLength={1}
+              value={d}
+              onChange={(e) => handleDigitChange(i, e)}
+              onKeyDown={(e) => handleDigitKeyDown(i, e)}
+              className="w-11 h-14 text-center text-xl font-semibold border border-gray-300 rounded-lg
+                         focus:outline-none focus:ring-2 focus:border-transparent"
+              style={
+                { "--tw-ring-color": "var(--color-primary)" } as React.CSSProperties
+              }
+            />
+          ))}
+        </div>
+
+        <button
+          onClick={onSubmitStep2}
+          disabled={!codeComplete}
+          className="btn-primary w-full"
+        >
+          {t("verifyAndCreate")}
+        </button>
+
+        <button
+          type="button"
+          onClick={() => {
+            setStep(1);
+            setServerError(null);
+            setDigits(["", "", "", "", "", ""]);
+          }}
+          className="mt-3 w-full text-sm text-gray-500 hover:text-gray-700"
+        >
+          ← {t("backToForm")}
+        </button>
+      </div>
+    );
+  }
+
+  // ── Step 1: registration form ────────────────────────────────────────────────
   return (
     <div className="card p-6">
-      <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+      <form onSubmit={handleSubmit(onSubmitStep1)} className="space-y-4">
         {serverError && (
           <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
             {serverError}
@@ -136,7 +296,7 @@ export function RegisterForm({ locale }: { locale: string }) {
           disabled={isSubmitting}
           className="btn-primary w-full"
         >
-          {isSubmitting ? "Creating account..." : t("register")}
+          {isSubmitting ? t("sendingCode") : t("register")}
         </button>
       </form>
 
