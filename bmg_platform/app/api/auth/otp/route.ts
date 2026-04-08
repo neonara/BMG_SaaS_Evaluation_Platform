@@ -8,8 +8,11 @@ const secret = new TextEncoder().encode(
 
 export async function POST(request: NextRequest) {
   try {
-    const { email, otp_code } = await request.json();
-    const { access, refresh } = await djangoVerifyOTP(email, otp_code);
+    const { email, otp_code, password, password_confirm } = await request.json();
+    const { access, refresh } = await djangoVerifyOTP(
+      email, otp_code,
+      password ? { password, password_confirm } : undefined,
+    );
 
     const parts = access.split(".");
     const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString());

@@ -1,6 +1,6 @@
 "use client";
 
-import { useRouter } from "next/navigation";
+import { useRouter, usePathname } from "next/navigation";
 import type { SessionUser } from "@/lib/auth/types";
 
 interface Props {
@@ -11,6 +11,7 @@ interface Props {
 
 export function Header({ user, locale, subdomain: _subdomain }: Props) {
   const router = useRouter();
+  const pathname = usePathname(); // e.g. "/en/tenants/abc-123"
 
   async function handleLogout() {
     await fetch("/api/auth/logout", { method: "POST" });
@@ -23,6 +24,14 @@ export function Header({ user, locale, subdomain: _subdomain }: Props) {
     { code: "fr", label: "FR" },
     { code: "ar", label: "AR" },
   ];
+
+  // Replace the leading locale segment while keeping the rest of the path.
+  // "/en/tenants/abc" → "/fr/tenants/abc"
+  function localePath(targetLocale: string): string {
+    const segments = pathname.split("/"); // ["", "en", "tenants", "abc"]
+    segments[1] = targetLocale;
+    return segments.join("/");
+  }
 
   return (
     <header className="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between flex-shrink-0">
@@ -39,7 +48,7 @@ export function Header({ user, locale, subdomain: _subdomain }: Props) {
           {locales.map((l) => (
             <a
               key={l.code}
-              href={`/${l.code}/dashboard`}
+              href={localePath(l.code)}
               className={`text-xs px-2 py-1 rounded font-medium transition-colors ${
                 locale === l.code
                   ? "text-white"

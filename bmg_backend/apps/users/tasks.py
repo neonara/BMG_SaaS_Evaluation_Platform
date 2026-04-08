@@ -56,7 +56,7 @@ def send_password_reset_email(self, user_id: str) -> None:
         return
     token = secrets.token_urlsafe(32)
     cache.set("pwd_reset:%s" % token, str(user.pk), timeout=1800)
-    reset_url = "%s/auth/reset-password?token=%s" % (settings.FRONTEND_URL, token)
+    reset_url = "%s/en/password-reset/confirm?token=%s" % (settings.FRONTEND_URL, token)
     body = "Click the link to reset your password:\n%s\n\nLink expires in 30 minutes." % reset_url
     send_mail(
         subject="BMG Platform — Password Reset",
@@ -67,9 +67,39 @@ def send_password_reset_email(self, user_id: str) -> None:
     logger.info("Password reset email sent to %s", user.email)
 
 
+@shared_task(bind=True, name="apps.users.tasks.send_account_created_email", queue="email")
+def send_account_created_email(self, user_id: str, otp_code: str) -> None:
+    """Sent immediately when an admin creates a new user account.
+
+    Delivers the 6-digit activation OTP so the user can verify their email
+    and complete the first login.
+    """
+    from apps.users.models import User
+    try:
+        user = User.objects.get(pk=user_id)
+    except User.DoesNotExist:
+        logger.warning("send_account_created_email: user %s not found", user_id)
+        return
+    otp_url = "%s/en/otp?email=%s&mode=activate" % (settings.FRONTEND_URL, user.email)
+    body = (
+        "Welcome to BMG Platform!\n\n"
+        "An account has been created for you.\n\n"
+        "Your activation code is: %s\n\n"
+        "Click here to activate your account:\n%s\n\n"
+        "This code expires in 5 minutes. If you did not expect this email, ignore it."
+    ) % (otp_code, otp_url)
+    send_mail(
+        subject="BMG Platform — Activate your account",
+        message=body,
+        from_email=settings.DEFAULT_FROM_EMAIL,
+        recipient_list=[user.email],
+    )
+    logger.info("Account activation email sent to %s", user.email)
+
+
 @shared_task(bind=True, name="apps.users.tasks.send_invitation_email", queue="email")
 def send_invitation_email(self, email: str, role: str) -> None:
-    invite_url = "%s/auth/register?role=%s" % (settings.FRONTEND_URL, role)
+    invite_url = "%s/en/register?role=%s" % (settings.FRONTEND_URL, role)
     body = (
         "You have been invited to join BMG Platform as %s.\n\n"
         "Register here: %s" % (role, invite_url)

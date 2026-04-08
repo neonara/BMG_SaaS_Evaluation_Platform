@@ -1,12 +1,19 @@
 import ky, { type KyInstance } from "ky";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+const DJANGO_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
-// Client-side API instance — uses fetch with credentials
-// JWT refresh is handled by the /api/auth/refresh Next.js route
+/**
+ * Browser-side API client.
+ *
+ * Routes through the Next.js BFF proxy at /api/v1/[...path] so that the
+ * server can attach the Authorization header from the httpOnly bmg_session
+ * cookie. The browser never touches the Django origin directly.
+ *
+ * prefixUrl "/" means:
+ *   apiClient.get("api/v1/users/")  →  GET /api/v1/users/  (Next.js proxy)
+ */
 export const apiClient: KyInstance = ky.create({
-  prefixUrl: API_URL,
-  credentials: "include",
+  prefixUrl: "/",
   headers: {
     "Content-Type": "application/json",
     Accept: "application/json",
@@ -14,17 +21,14 @@ export const apiClient: KyInstance = ky.create({
   hooks: {
     beforeError: [
       async (error) => {
-        const { response } = error;
-        if (response?.status === 401) {
-          // Try refreshing the token
+        if (error.response?.status === 401) {
           const refreshRes = await fetch("/api/auth/refresh", { method: "POST" });
-          if (refreshRes.ok) {
-            // Retry the original request — ky handles this via retry
-          } else {
-            // Refresh failed — redirect to login
+          if (!refreshRes.ok) {
             const locale = document.documentElement.lang || "en";
             window.location.href = `/${locale}/login?reason=session_expired`;
           }
+          // On success, ky's retry fires with the updated cookie → proxy picks up
+          // the new access token from the refreshed bmg_session automatically.
         }
         return error;
       },
@@ -33,10 +37,13 @@ export const apiClient: KyInstance = ky.create({
   retry: { limit: 1, statusCodes: [401] },
 });
 
-// Server-side API instance — attaches Authorization header from session
+/**
+ * Server-side API client (Server Components, Route Handlers).
+ * Calls Django directly with an explicit Bearer token — no proxy needed.
+ */
 export function createServerApiClient(accessToken: string): KyInstance {
   return ky.create({
-    prefixUrl: API_URL,
+    prefixUrl: DJANGO_URL,
     headers: {
       "Content-Type": "application/json",
       Accept: "application/json",

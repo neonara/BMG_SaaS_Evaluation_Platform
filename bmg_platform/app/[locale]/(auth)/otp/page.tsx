@@ -3,12 +3,12 @@ import { getTranslations } from "next-intl/server";
 
 interface Props {
   params: Promise<{ locale: string }>;
-  searchParams: Promise<{ email?: string }>;
+  searchParams: Promise<{ email?: string; mode?: string }>;
 }
 
 export default async function OTPPage({ params, searchParams }: Props) {
   const { locale } = await params;
-  const { email } = await searchParams;
+  const { email, mode } = await searchParams;
   const t = await getTranslations("auth");
 
   if (!email) {
@@ -32,7 +32,7 @@ export default async function OTPPage({ params, searchParams }: Props) {
             </p>
           )}
         </div>
-        <OTPForm locale={locale} email={email ?? ""} />
+        <OTPForm locale={locale} email={email ?? ""} requirePassword={mode === "activate"} />
       </div>
     </div>
   );

@@ -17,6 +17,9 @@ python manage.py makemigrations audit   --noinput 2>/dev/null || true
 echo "--- migrate_schemas --shared ---"
 python manage.py migrate_schemas --shared --fake-initial --noinput
 
+echo "--- migrate_schemas (tenant schemas) ---"
+python manage.py migrate_schemas --noinput 2>/dev/null || true
+
 echo "--- collectstatic ---"
 python manage.py collectstatic --noinput --clear 2>/dev/null || python manage.py collectstatic --noinput
 

@@ -84,20 +84,29 @@ class UserProfileUpdateSerializer(serializers.ModelSerializer):
 class UserAdminSerializer(serializers.ModelSerializer):
     """Admin view — includes deactivated_at for HR/AC visibility."""
 
+    organisation = serializers.SerializerMethodField()
+
+    def get_organisation(self, obj) -> str:
+        schema = obj.tenant_schema or "public"
+        return "BMG (Platform)" if schema == "public" else schema.replace("_", " ").title()
+
     class Meta:
         model = User
         fields = [
             "id", "email", "first_name", "last_name",
             "role", "status", "personal_email",
-            "deactivated_at", "date_joined",
+            "deactivated_at", "date_joined", "organisation",
         ]
-        read_only_fields = ["id", "email", "date_joined", "deactivated_at"]
+        read_only_fields = ["id", "email", "date_joined", "deactivated_at", "organisation"]
 
 
 class UserCreateSerializer(serializers.ModelSerializer):
+    tenant_schema = serializers.CharField(required=False, allow_blank=True, write_only=True)
+
     class Meta:
         model = User
-        fields = ["email", "first_name", "last_name", "role"]
+        fields = ["id", "email", "first_name", "last_name", "role", "status", "date_joined", "tenant_schema"]
+        read_only_fields = ["id", "status", "date_joined"]
 
     def validate_role(self, value: str) -> str:
         # Requesting user cannot assign a role >= their own
@@ -116,15 +125,24 @@ class UserCreateSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data: dict) -> User:
         import secrets
+        from django.db import connection
         temp_password = secrets.token_urlsafe(24)
+        # Use explicitly provided tenant_schema, or fall back to current connection schema
+        tenant_schema = validated_data.pop("tenant_schema", None) or connection.schema_name
         user = User.objects.create_user(
             email=validated_data["email"],
             password=temp_password,
             first_name=validated_data["first_name"],
             last_name=validated_data["last_name"],
             role=validated_data["role"],
-            status="active",
+            status="pending_otp",
+            tenant_schema=tenant_schema,
         )
+        # Generate OTP and email it immediately so the user can activate now
+        from apps.users.otp import generate_and_store
+        otp_code = generate_and_store(user.email)
+        from apps.users.tasks import send_account_created_email
+        send_account_created_email.delay(user_id=str(user.pk), otp_code=otp_code)
         return user
 
 
@@ -230,6 +248,17 @@ class OTPVerifySerializer(serializers.Serializer):
         regex=r"^[0-9]{6}$",
         error_messages={"invalid": "OTP must be exactly 6 digits."},
     )
+    # Optional — provided when the user is setting their password for the first time
+    # (admin-created accounts). If absent, the existing password is kept.
+    password = serializers.CharField(min_length=8, write_only=True, required=False)
+    password_confirm = serializers.CharField(write_only=True, required=False)
+
+    def validate(self, attrs: dict) -> dict:
+        password = attrs.get("password")
+        password_confirm = attrs.get("password_confirm")
+        if password and password != password_confirm:
+            raise serializers.ValidationError({"password_confirm": "Passwords do not match."})
+        return attrs
 
 
 class PasswordResetRequestSerializer(serializers.Serializer):

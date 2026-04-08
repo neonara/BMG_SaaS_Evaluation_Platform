@@ -280,7 +280,10 @@ class OTPVerifyView(APIView):
             )
 
         user.status = "active"
-        user.save(update_fields=["status"])
+        new_password = serializer.validated_data.get("password")
+        if new_password:
+            user.set_password(new_password)
+        user.save()
 
         from rest_framework_simplejwt.tokens import RefreshToken
         refresh = RefreshToken.for_user(user)
@@ -415,7 +418,12 @@ class UserViewSet(
         qs = User.objects.all()
         if user.role == Role.MANAGER:
             return qs.none()
-        return qs.order_by("email")
+        if user.role == Role.SUPER_ADMIN:
+            return qs.order_by("email")
+        # admin_client / hr — scope to their own tenant
+        from django.db import connection
+        schema = connection.schema_name
+        return qs.filter(tenant_schema=schema).order_by("email")
 
     def get_serializer_class(self):
         if self.action == "create":

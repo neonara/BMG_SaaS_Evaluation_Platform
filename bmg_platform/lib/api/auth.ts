@@ -59,12 +59,13 @@ export async function djangoLogout(refreshToken: string): Promise<void> {
 
 export async function djangoVerifyOTP(
   email: string,
-  otpCode: string
+  otpCode: string,
+  passwordPayload?: { password: string; password_confirm: string },
 ): Promise<LoginResponse> {
   const res = await fetch(`${API_URL}/api/auth/otp/verify/`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email, otp_code: otpCode }),
+    body: JSON.stringify({ email, otp_code: otpCode, ...passwordPayload }),
   });
 
   if (!res.ok) {

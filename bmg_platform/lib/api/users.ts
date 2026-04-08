@@ -11,6 +11,7 @@ export interface User {
   personal_email?: string;
   deactivated_at?: string;
   date_joined: string;
+  organisation?: string;
 }
 
 export interface PaginatedUsers {
@@ -25,6 +26,7 @@ export interface CreateUserPayload {
   first_name: string;
   last_name: string;
   role: Role;
+  tenant_schema?: string;
 }
 
 export async function getMe(): Promise<User> {
