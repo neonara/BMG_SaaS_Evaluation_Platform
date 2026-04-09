@@ -34,14 +34,15 @@ export function LoginForm({ locale }: { locale: string }) {
       });
       const body = await res.json();
       if (res.status === 202 && body.requires_otp) {
-        router.push(`/${locale}/otp?email=${encodeURIComponent(data.email)}`);
+        // locale-aware router: do NOT include locale prefix in path
+        router.push(`/otp?email=${encodeURIComponent(data.email)}`);
         return;
       }
       if (!res.ok) {
         setServerError(body.detail ?? "Login failed");
         return;
       }
-      router.push(`/${locale}/dashboard`);
+      router.push("/dashboard");
       router.refresh();
     } catch {
       setServerError("Network error. Please try again.");

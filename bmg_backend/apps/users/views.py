@@ -44,12 +44,23 @@ from core.throttling import (
 
 # ── Auth views ───────────────────────────────────────────────────────────────
 
+# Roles that must pass 2FA on every login
+TWO_FA_ROLES = {
+    Role.SUPER_ADMIN,
+    Role.ADMIN_CLIENT,
+    Role.HR,
+    Role.MANAGER,
+    Role.INTERNAL_CANDIDATE,
+}
+
+
 @extend_schema(tags=["Auth"])
 class CustomTokenObtainPairView(TokenObtainPairView):
     """
     POST /api/auth/token/
-    Returns 200 with token pair for active users.
-    Returns 202 for internal candidates with status=pending_otp.
+    Returns 200 with token pair for external candidates.
+    Returns 202 + requires_otp for staff / internal candidates (2FA on every login).
+    Returns 202 + requires_otp if user status is pending_otp (account activation).
     """
     serializer_class = CustomTokenObtainPairSerializer
     throttle_classes = [LoginThrottle]
@@ -59,6 +70,7 @@ class CustomTokenObtainPairView(TokenObtainPairView):
         try:
             serializer.is_valid(raise_exception=True)
         except Exception:
+            # Credentials wrong or account locked — but still handle pending_otp users
             email = request.data.get("email", "")
             try:
                 user = User.objects.get(email=email)
@@ -73,6 +85,22 @@ class CustomTokenObtainPairView(TokenObtainPairView):
             except User.DoesNotExist:
                 pass
             raise
+
+        user = serializer.user
+        # 2FA: generate and send OTP for all staff + internal-candidate roles
+        if user.role in TWO_FA_ROLES and user.status == "active":
+            from apps.users.otp import generate_and_store
+            otp_code = generate_and_store(user.email)
+            from apps.users.tasks import send_otp_email
+            send_otp_email.delay(user_id=str(user.pk), otp_code=otp_code)
+            return Response(
+                {
+                    "detail": f"A verification code has been sent to {user.email}.",
+                    "requires_otp": True,
+                },
+                status=status.HTTP_202_ACCEPTED,
+            )
+
         return Response(serializer.validated_data)
 
 
@@ -259,7 +287,8 @@ class OTPVerifyView(APIView):
         from apps.users.otp import generate_and_store, verify
         if not verify(email, code):
             try:
-                user = User.objects.get(email=email, status="pending_otp")
+                # Resend a new OTP (works for both pending_otp and 2FA active users)
+                user = User.objects.get(email=email, status__in=["pending_otp", "active"])
                 new_code = generate_and_store(email)
                 from apps.users.tasks import send_otp_email
                 send_otp_email.delay(user_id=str(user.pk), otp_code=new_code)
@@ -272,18 +301,21 @@ class OTPVerifyView(APIView):
             )
 
         try:
-            user = User.objects.get(email=email, status="pending_otp")
+            user = User.objects.get(email=email, status__in=["pending_otp", "active"])
         except User.DoesNotExist:
             return Response(
                 {"error": True, "status_code": 400, "detail": "Invalid OTP code."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        user.status = "active"
-        new_password = serializer.validated_data.get("password")
-        if new_password:
-            user.set_password(new_password)
-        user.save()
+        if user.status == "pending_otp":
+            # Account activation flow: activate + optionally set password
+            user.status = "active"
+            new_password = serializer.validated_data.get("password")
+            if new_password:
+                user.set_password(new_password)
+            user.save()
+        # If status == "active": 2FA login — no status change needed
 
         from rest_framework_simplejwt.tokens import RefreshToken
         refresh = RefreshToken.for_user(user)

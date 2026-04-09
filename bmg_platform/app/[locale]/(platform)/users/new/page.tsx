@@ -10,23 +10,34 @@ interface TenantOption {
   name: string;
 }
 
+interface ManagerOption {
+  id: string;
+  first_name: string;
+  last_name: string;
+  email: string;
+}
+
 export default async function NewUserPage({ params }: Props) {
   const { locale } = await params;
   await requireRole(locale, ["super_admin", "admin_client", "hr"]);
   const t = await getTranslations("users");
   const session = await getSession();
 
-  let tenants: TenantOption[] = [];
+  const DJANGO_URL =
+    process.env.DJANGO_INTERNAL_URL ??
+    process.env.NEXT_PUBLIC_API_URL ??
+    "http://localhost:8000";
+  const token = await getAccessToken();
+  const headers = { Authorization: `Bearer ${token}` };
 
+  let tenants: TenantOption[] = [];
+  let managers: ManagerOption[] = [];
+
+  // super_admin gets a tenant picker
   if (session?.role === "super_admin") {
-    const DJANGO_URL =
-      process.env.DJANGO_INTERNAL_URL ??
-      process.env.NEXT_PUBLIC_API_URL ??
-      "http://localhost:8000";
-    const token = await getAccessToken();
     try {
       const res = await fetch(`${DJANGO_URL}/api/v1/tenants/`, {
-        headers: { Authorization: `Bearer ${token}` },
+        headers,
         cache: "no-store",
       });
       if (res.ok) {
@@ -37,7 +48,28 @@ export default async function NewUserPage({ params }: Props) {
         }));
       }
     } catch {
-      // not fatal — super_admin can still create without a tenant picker
+      // not fatal
+    }
+  }
+
+  // HR gets a manager picker to assign internal candidates
+  if (session?.role === "hr") {
+    try {
+      const res = await fetch(`${DJANGO_URL}/api/v1/users/?role=manager`, {
+        headers,
+        cache: "no-store",
+      });
+      if (res.ok) {
+        const data = await res.json();
+        managers = (data.results ?? data).map((u: ManagerOption) => ({
+          id: u.id,
+          first_name: u.first_name,
+          last_name: u.last_name,
+          email: u.email,
+        }));
+      }
+    } catch {
+      // not fatal
     }
   }
 
@@ -51,6 +83,7 @@ export default async function NewUserPage({ params }: Props) {
         locale={locale}
         session={session}
         tenants={tenants}
+        managers={managers}
       />
     </div>
   );

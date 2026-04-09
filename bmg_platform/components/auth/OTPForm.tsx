@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState, type ChangeEvent, type KeyboardEvent } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter } from "@/lib/i18n/routing";
 import { useTranslations } from "next-intl";
 
 interface Props {
@@ -71,7 +71,7 @@ export function OTPForm({ locale, email, requirePassword = false }: Props) {
         refs.current[0]?.focus();
         return;
       }
-      router.push(`/${locale}/dashboard`);
+      router.push("/dashboard");
       router.refresh();
     } catch {
       setError("Network error. Please try again.");
@@ -112,7 +112,7 @@ export function OTPForm({ locale, email, requirePassword = false }: Props) {
         setPasswordConfirm("");
         return;
       }
-      router.push(`/${locale}/dashboard`);
+      router.push("/dashboard");
       router.refresh();
     } catch {
       setError("Network error. Please try again.");

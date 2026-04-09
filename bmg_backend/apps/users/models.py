@@ -75,6 +75,17 @@ class User(AbstractBaseUser, PermissionsMixin):
     # Which tenant created/owns this user (schema_name of the tenant)
     tenant_schema = models.CharField(max_length=100, blank=True, db_index=True)
 
+    # Manager assigned by HR when creating an internal candidate
+    assigned_manager = models.ForeignKey(
+        "self",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="managed_candidates",
+        limit_choices_to={"role": "manager"},
+        db_column="assigned_manager_id",
+    )
+
     # Language preference — FK to multi_language.Language (nullable = use platform default)
     preferred_language = models.ForeignKey(
         "multi_language.Language",

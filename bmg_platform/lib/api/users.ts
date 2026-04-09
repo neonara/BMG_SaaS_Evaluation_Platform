@@ -27,6 +27,7 @@ export interface CreateUserPayload {
   last_name: string;
   role: Role;
   tenant_schema?: string;
+  assigned_manager?: string;
 }
 
 export async function getMe(): Promise<User> {
