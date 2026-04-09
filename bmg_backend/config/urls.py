@@ -1,36 +1,35 @@
 """
-Root URL configuration.
-django-tenants routes requests by subdomain — this file handles
-the shared (public) URL space plus API and GraphQL endpoints.
+config/urls.py — Root URL configuration.
 """
 from django.conf import settings
 from django.contrib import admin
 from django.urls import include, path
-
-from graphene_django.views import GraphQLView
 from rest_framework_simplejwt.views import TokenRefreshView
-
+from config.urls_docs import docs_urlpatterns
 from apps.users.views import CustomTokenObtainPairView
+from core.health.views import HealthCheckView
 
 urlpatterns = [
-    # ── Health check (used by Docker + CI) ──────────────────────
-    path("api/health/", include("core.health.urls")),
+    # ── Health check (no auth, no tenant required) ───────────
+    path("api/health/", HealthCheckView.as_view(), name="health_check"),
 
-    # ── Auth endpoints ───────────────────────────────────────────
+    # ── JWT Auth ──────────────────────────────────────────────
     path("api/auth/token/",         CustomTokenObtainPairView.as_view(), name="token_obtain_pair"),
     path("api/auth/token/refresh/", TokenRefreshView.as_view(),          name="token_refresh"),
     path("api/auth/",               include("apps.users.urls.auth")),
 
-    # ── API v1 ───────────────────────────────────────────────────
+    # ── API v1 ────────────────────────────────────────────────
     path("api/v1/", include("config.api_router")),
 
-    # ── GraphQL ──────────────────────────────────────────────────
-    path("graphql/", GraphQLView.as_view(graphiql=settings.DEBUG)),
-
-    # ── Admin (Super Admin BMG only) ─────────────────────────────
-  #  path("bmg-admin/", admin.site.urls),
+    # ── Admin ─────────────────────────────────────────────────
+    path("bmg-admin/", admin.site.urls),
 ]
+urlpatterns += docs_urlpatterns                  
+
 
 if settings.DEBUG:
-    import debug_toolbar
-    urlpatterns += [path("__debug__/", include(debug_toolbar.urls))]
+    try:
+        import debug_toolbar
+        urlpatterns += [path("__debug__/", include(debug_toolbar.urls))]
+    except ImportError:
+        pass

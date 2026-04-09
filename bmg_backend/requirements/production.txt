@@ -1,4 +1,4 @@
 -r base.txt
-gunicorn==22.*
-sentry-sdk[django]==2.*
-whitenoise==6.*               # Serve static files (behind Nginx)
+gunicorn>=22.0,<23.0
+whitenoise>=6.6,<7.0
+sentry-sdk[django]>=2.0,<3.0

@@ -1,42 +1,45 @@
-# ── Django core ──────────────────────────────────────────────────
-Django==5.1.*
-django-tenants==3.7.*          # Separate PostgreSQL schema per tenant
-djangorestframework==3.15.*    # REST API
-djangorestframework-simplejwt==5.3.*  # JWT auth
-django-cors-headers==4.4.*
-django-filter==24.*
-dj-database-url==2.*           # Parse DATABASE_URL env var
-django-environ==0.11.*         # .env file loading
+# ── Django core ──────────────────────────────────────────────
+Django>=5.0,<6.0
+django-tenants>=3.6,<4.0
+djangorestframework>=3.15,<4.0
+djangorestframework-simplejwt>=5.3,<6.0
+django-cors-headers>=4.3,<5.0
+django-filter>=24.0,<25.0
+dj-database-url>=2.1,<3.0
+django-environ>=0.11,<1.0
 
-# ── GraphQL ──────────────────────────────────────────────────────
-graphene-django==3.2.*
-graphene==3.3.*
-django-graphql-jwt==0.4.*      # JWT auth for GraphQL
+# ── GraphQL ──────────────────────────────────────────────────
+graphene-django>=3.2,<4.0
 
-# ── Celery ───────────────────────────────────────────────────────
-celery==5.4.*
-django-celery-beat==2.7.*      # Periodic tasks stored in DB
-django-celery-results==2.5.*   # Task results stored in DB
-kombu==5.3.*                   # RabbitMQ transport
+# ── Celery ───────────────────────────────────────────────────
+celery>=5.3,<6.0
+django-celery-beat>=2.6,<3.0
+django-celery-results>=2.5,<3.0
 
-# ── Database ─────────────────────────────────────────────────────
-psycopg2-binary==2.9.*
-redis==5.0.*                   # Redis client (cache + Celery backend)
-django-redis==5.4.*            # Django cache backend using Redis
+# ── Database ─────────────────────────────────────────────────
+psycopg2-binary>=2.9,<3.0
+redis>=5.0,<6.0
+django-redis>=5.4,<6.0
 
-# ── Storage ──────────────────────────────────────────────────────
-cloudinary==1.40.*
-django-cloudinary-storage==0.3.*
+# ── Storage ──────────────────────────────────────────────────
+cloudinary>=1.36,<2.0
+django-cloudinary-storage>=0.3,<1.0
 
-# ── PDF / Anti-cheat ─────────────────────────────────────────────
-httpx==0.27.*                  # HTTP client → Gotenberg API
-selenium==4.21.*               # Anti-cheat browser automation
+# ── HTTP / PDF ───────────────────────────────────────────────
+httpx>=0.27,<1.0
+selenium>=4.18,<5.0
 
-# ── Utils ────────────────────────────────────────────────────────
-Pillow==10.*                   # Image processing
-python-dateutil==2.9.*
-pytz==2024.*
-openpyxl==3.1.*                # Excel import (questions CSV/Excel)
-python-csv==0.0.*
-drf-spectacular==0.27.*            # OpenAPI 3.1 schema generation
-drf-spectacular[sidecar]==0.27.*   # Swagger UI + Redoc static assets
+# ── Utils ────────────────────────────────────────────────────
+Pillow>=10.0,<11.0
+python-dateutil>=2.9,<3.0
+openpyxl>=3.1,<4.0
+
+# ── API Docs ─────────────────────────────────────────────────
+drf-spectacular[sidecar]>=0.27,<1.0
+
+# ── LDAP (US-005: AD/LDAP sync) ──────────────────────────────
+django-python3-ldap>=0.15,<1.0
+
+# ── i18n tooling ─────────────────────────────────────────────
+# Run: django-admin compilemessages  (after editing .po files)
+# No extra package needed — USE_I18N=True activates Django's built-in gettext

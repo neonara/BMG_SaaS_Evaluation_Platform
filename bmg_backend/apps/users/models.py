@@ -72,6 +72,30 @@ class User(AbstractBaseUser, PermissionsMixin):
     # Timestamp when account was deactivated (used by GDPR purge task)
     deactivated_at = models.DateTimeField(null=True, blank=True)
 
+    # Which tenant created/owns this user (schema_name of the tenant)
+    tenant_schema = models.CharField(max_length=100, blank=True, db_index=True)
+
+    # Manager assigned by HR when creating an internal candidate
+    assigned_manager = models.ForeignKey(
+        "self",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="managed_candidates",
+        limit_choices_to={"role": "manager"},
+        db_column="assigned_manager_id",
+    )
+
+    # Language preference — FK to multi_language.Language (nullable = use platform default)
+    preferred_language = models.ForeignKey(
+        "multi_language.Language",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="users",
+        db_column="preferred_language_code",
+    )
+
     is_staff = models.BooleanField(default=False)
     is_active = models.BooleanField(default=True)
     date_joined = models.DateTimeField(auto_now_add=True)

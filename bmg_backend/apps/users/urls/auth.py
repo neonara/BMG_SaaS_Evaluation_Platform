@@ -5,12 +5,14 @@ from apps.users.views import (
     OTPVerifyView,
     PasswordResetConfirmView,
     PasswordResetRequestView,
+    RegisterExternalSendOTPView,
     RegisterExternalView,
     RegisterInternalView,
 )
 
 urlpatterns = [
     path("logout/",                  LogoutView.as_view(),               name="auth-logout"),
+    path("register/send-otp/",       RegisterExternalSendOTPView.as_view(), name="auth-register-send-otp"),
     path("register/",                RegisterExternalView.as_view(),     name="auth-register-external"),
     path("register/internal/",       RegisterInternalView.as_view(),     name="auth-register-internal"),
     path("otp/verify/",              OTPVerifyView.as_view(),            name="auth-otp-verify"),

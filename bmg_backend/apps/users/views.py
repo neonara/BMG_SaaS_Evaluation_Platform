@@ -5,6 +5,7 @@ import secrets
 from datetime import timedelta
 
 from django.utils import timezone
+from drf_spectacular.utils import OpenApiResponse, extend_schema, extend_schema_view
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -21,6 +22,7 @@ from apps.users.serializers import (
     OTPVerifySerializer,
     PasswordResetConfirmSerializer,
     PasswordResetRequestSerializer,
+    RegisterExternalSendOTPSerializer,
     RegisterExternalSerializer,
     RegisterInternalSerializer,
     UserAdminSerializer,
@@ -33,20 +35,32 @@ from apps.users.serializers import (
 from core.permissions.permissions import IsAdminClient, IsHR, IsSuperAdmin
 from core.permissions.roles import Role
 from core.throttling import (
+    ExportRequestThrottle,
     LoginThrottle,
     OTPVerifyThrottle,
     PasswordResetThrottle,
-    ExportRequestThrottle,
 )
 
 
 # ── Auth views ───────────────────────────────────────────────────────────────
 
+# Roles that must pass 2FA on every login
+TWO_FA_ROLES = {
+    Role.SUPER_ADMIN,
+    Role.ADMIN_CLIENT,
+    Role.HR,
+    Role.MANAGER,
+    Role.INTERNAL_CANDIDATE,
+}
+
+
+@extend_schema(tags=["Auth"])
 class CustomTokenObtainPairView(TokenObtainPairView):
     """
     POST /api/auth/token/
-    Returns 200 with token pair for active users.
-    Returns 202 for internal candidates with status=pending_otp.
+    Returns 200 with token pair for external candidates.
+    Returns 202 + requires_otp for staff / internal candidates (2FA on every login).
+    Returns 202 + requires_otp if user status is pending_otp (account activation).
     """
     serializer_class = CustomTokenObtainPairSerializer
     throttle_classes = [LoginThrottle]
@@ -56,7 +70,7 @@ class CustomTokenObtainPairView(TokenObtainPairView):
         try:
             serializer.is_valid(raise_exception=True)
         except Exception:
-            # Check if user exists but needs OTP
+            # Credentials wrong or account locked — but still handle pending_otp users
             email = request.data.get("email", "")
             try:
                 user = User.objects.get(email=email)
@@ -71,16 +85,43 @@ class CustomTokenObtainPairView(TokenObtainPairView):
             except User.DoesNotExist:
                 pass
             raise
+
+        user = serializer.user
+        # 2FA: generate and send OTP for all staff + internal-candidate roles
+        if user.role in TWO_FA_ROLES and user.status == "active":
+            from apps.users.otp import generate_and_store
+            otp_code = generate_and_store(user.email)
+            from apps.users.tasks import send_otp_email
+            send_otp_email.delay(user_id=str(user.pk), otp_code=otp_code)
+            return Response(
+                {
+                    "detail": f"A verification code has been sent to {user.email}.",
+                    "requires_otp": True,
+                },
+                status=status.HTTP_202_ACCEPTED,
+            )
+
         return Response(serializer.validated_data)
 
 
+@extend_schema(
+    tags=["Auth"],
+    summary="Logout",
+    description="Blacklists the current JWT refresh token, invalidating the session.",
+    request={"application/json": {"type": "object", "properties": {"refresh": {"type": "string"}}}},
+    responses={
+        204: OpenApiResponse(description="Logged out successfully."),
+        400: OpenApiResponse(description="Missing or invalid refresh token."),
+    },
+)
 class LogoutView(APIView):
     """POST /api/auth/logout/ — blacklist the refresh token."""
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        from rest_framework_simplejwt.tokens import RefreshToken
         from rest_framework_simplejwt.exceptions import TokenError
+        from rest_framework_simplejwt.tokens import RefreshToken
+
         from core.cache.service import blacklist_jwt
 
         refresh_token = request.data.get("refresh")
@@ -97,15 +138,71 @@ class LogoutView(APIView):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
+@extend_schema(
+    tags=["Auth"],
+    summary="Send registration OTP (external candidate)",
+    description=(
+        "Step 1 of B2C self-registration. Validates that the email is not taken, "
+        "then sends a 6-digit OTP to that address. The OTP expires in 5 minutes."
+    ),
+    request=RegisterExternalSendOTPSerializer,
+    responses={
+        200: OpenApiResponse(description="OTP sent to the provided email."),
+        400: OpenApiResponse(description="Validation error (email taken or invalid)."),
+    },
+)
+class RegisterExternalSendOTPView(APIView):
+    """POST /api/auth/register/send-otp/ — email verification before account creation."""
+    permission_classes = [AllowAny]
+    throttle_classes = [OTPVerifyThrottle]
+
+    def post(self, request):
+        serializer = RegisterExternalSendOTPSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        email = serializer.validated_data["email"]
+
+        from apps.users.otp import generate_and_store
+        otp_code = generate_and_store(email)
+        from apps.users.tasks import send_otp_to_email
+        send_otp_to_email.delay(email=email, otp_code=otp_code)
+
+        return Response(
+            {"detail": f"A verification code has been sent to {email}. It expires in 5 minutes."},
+            status=status.HTTP_200_OK,
+        )
+
+
+@extend_schema(
+    tags=["Auth"],
+    summary="Register external candidate",
+    description=(
+        "Step 2 of B2C self-registration. Verifies the OTP sent to the candidate's "
+        "email, then creates an active account."
+    ),
+    responses={
+        201: UserPublicSerializer,
+        400: OpenApiResponse(description="Validation error or invalid OTP."),
+    },
+)
 class RegisterExternalView(APIView):
-    """POST /api/auth/register/ — B2C external candidate registration."""
+    """POST /api/auth/register/ — B2C external candidate registration (requires valid OTP)."""
     permission_classes = [AllowAny]
 
     def post(self, request):
         serializer = RegisterExternalSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+
+        email = serializer.validated_data["email"]
+        otp_code = serializer.validated_data["otp_code"]
+
+        from apps.users.otp import verify
+        if not verify(email, otp_code):
+            return Response(
+                {"error": True, "status_code": 400, "detail": "Invalid or expired verification code."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         user = serializer.save()
-        # Queue welcome email
         from apps.notifications.tasks import send_notification
         send_notification.delay(
             user_id=str(user.pk),
@@ -115,12 +212,17 @@ class RegisterExternalView(APIView):
         return Response(UserPublicSerializer(user).data, status=status.HTTP_201_CREATED)
 
 
+@extend_schema(
+    tags=["Auth"],
+    summary="Register internal candidate",
+    description="Auto-detects tenant from email domain. Sends OTP to activate account.",
+    responses={
+        201: OpenApiResponse(description="OTP sent — account pending verification."),
+        404: OpenApiResponse(description="No organisation found for this email domain."),
+    },
+)
 class RegisterInternalView(APIView):
-    """
-    POST /api/auth/register/internal/
-    Auto-detect tenant from email domain, create account with
-    status=pending_otp, send OTP.
-    """
+    """POST /api/auth/register/internal/"""
     permission_classes = [AllowAny]
 
     def post(self, request):
@@ -129,7 +231,6 @@ class RegisterInternalView(APIView):
 
         email = serializer.validated_data["email"]
 
-        # Resolve tenant by email domain
         from apps.tenants.models import Domain
         tenant = Domain.get_tenant_by_email_domain(email)
         if tenant is None:
@@ -139,7 +240,6 @@ class RegisterInternalView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        # Create user with pending_otp status
         user = User.objects.create_user(
             email=email,
             password=serializer.validated_data["password"],
@@ -149,7 +249,6 @@ class RegisterInternalView(APIView):
             status="pending_otp",
         )
 
-        # Generate and send OTP
         from apps.users.otp import generate_and_store
         otp_code = generate_and_store(email)
         from apps.users.tasks import send_otp_email
@@ -164,8 +263,17 @@ class RegisterInternalView(APIView):
         )
 
 
+@extend_schema(
+    tags=["Auth"],
+    summary="Verify OTP",
+    description="Verifies the OTP code. Activates the account and returns a token pair.",
+    responses={
+        200: OpenApiResponse(description="Account activated — token pair returned."),
+        400: OpenApiResponse(description="Invalid or expired OTP."),
+    },
+)
 class OTPVerifyView(APIView):
-    """POST /api/auth/otp/verify/ — verify OTP and return token pair."""
+    """POST /api/auth/otp/verify/"""
     permission_classes = [AllowAny]
     throttle_classes = [OTPVerifyThrottle]
 
@@ -178,9 +286,9 @@ class OTPVerifyView(APIView):
 
         from apps.users.otp import generate_and_store, verify
         if not verify(email, code):
-            # Regenerate and resend OTP for expired case
             try:
-                user = User.objects.get(email=email, status="pending_otp")
+                # Resend a new OTP (works for both pending_otp and 2FA active users)
+                user = User.objects.get(email=email, status__in=["pending_otp", "active"])
                 new_code = generate_and_store(email)
                 from apps.users.tasks import send_otp_email
                 send_otp_email.delay(user_id=str(user.pk), otp_code=new_code)
@@ -193,20 +301,40 @@ class OTPVerifyView(APIView):
             )
 
         try:
-            user = User.objects.get(email=email, status="pending_otp")
+            user = User.objects.get(email=email, status__in=["pending_otp", "active"])
         except User.DoesNotExist:
             return Response(
                 {"error": True, "status_code": 400, "detail": "Invalid OTP code."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Activate account
-        user.status = "active"
-        user.save(update_fields=["status"])
+        if user.status == "pending_otp":
+            # Account activation flow: activate + optionally set password
+            user.status = "active"
+            new_password = serializer.validated_data.get("password")
+            if new_password:
+                user.set_password(new_password)
+            user.save()
+        # If status == "active": 2FA login — no status change needed
 
-        # Issue token pair
         from rest_framework_simplejwt.tokens import RefreshToken
         refresh = RefreshToken.for_user(user)
+
+        # Add the same custom claims that CustomTokenObtainPairSerializer adds,
+        # so the Next.js session cookie contains role, email, and tenant_schema.
+        try:
+            from django.db import connection
+            tenant_schema = connection.schema_name
+        except Exception:
+            tenant_schema = user.tenant_schema or "public"
+
+        refresh["email"] = user.email
+        refresh["role"] = user.role
+        refresh["tenant_schema"] = tenant_schema
+        refresh.access_token["email"] = user.email
+        refresh.access_token["role"] = user.role
+        refresh.access_token["tenant_schema"] = tenant_schema
+
         from core.cache.service import register_user_token
         register_user_token(str(user.pk), str(refresh["jti"]))
 
@@ -216,11 +344,14 @@ class OTPVerifyView(APIView):
         })
 
 
+@extend_schema(
+    tags=["Auth"],
+    summary="Request password reset",
+    description="Always returns 200 to prevent email enumeration.",
+    responses={200: OpenApiResponse(description="Reset link sent if account exists.")},
+)
 class PasswordResetRequestView(APIView):
-    """
-    POST /api/auth/password/reset/
-    Always returns 200 to prevent email enumeration.
-    """
+    """POST /api/auth/password/reset/"""
     permission_classes = [AllowAny]
     throttle_classes = [PasswordResetThrottle]
 
@@ -233,12 +364,21 @@ class PasswordResetRequestView(APIView):
             from apps.users.tasks import send_password_reset_email
             send_password_reset_email.delay(user_id=str(user.pk))
         except User.DoesNotExist:
-            pass  # Intentional — no email enumeration
+            pass
         return Response(
             {"detail": "If an account exists, a reset link has been sent."}
         )
 
 
+@extend_schema(
+    tags=["Auth"],
+    summary="Confirm password reset",
+    description="Validates the reset token and sets the new password.",
+    responses={
+        200: OpenApiResponse(description="Password reset successfully."),
+        400: OpenApiResponse(description="Invalid or expired token."),
+    },
+)
 class PasswordResetConfirmView(APIView):
     """POST /api/auth/password/reset/confirm/"""
     permission_classes = [AllowAny]
@@ -250,12 +390,12 @@ class PasswordResetConfirmView(APIView):
         token = serializer.validated_data["token"]
         new_password = serializer.validated_data["password"]
 
-        # Validate token from cache
         from django.core.cache import cache
         user_id = cache.get(f"pwd_reset:{token}")
         if not user_id:
             return Response(
-                {"error": True, "status_code": 400, "detail": "Invalid or expired reset token."},
+                {"error": True, "status_code": 400,
+                 "detail": "Invalid or expired reset token."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -263,7 +403,8 @@ class PasswordResetConfirmView(APIView):
             user = User.objects.get(pk=user_id)
         except User.DoesNotExist:
             return Response(
-                {"error": True, "status_code": 400, "detail": "Invalid or expired reset token."},
+                {"error": True, "status_code": 400,
+                 "detail": "Invalid or expired reset token."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -271,7 +412,6 @@ class PasswordResetConfirmView(APIView):
         user.save(update_fields=["password"])
         cache.delete(f"pwd_reset:{token}")
 
-        # Revoke all existing tokens
         from core.cache.service import blacklist_all_user_tokens
         blacklist_all_user_tokens(str(user.pk))
 
@@ -280,14 +420,20 @@ class PasswordResetConfirmView(APIView):
 
 # ── User views ───────────────────────────────────────────────────────────────
 
+@extend_schema(tags=["Users"])
 class MeView(APIView):
     """GET/PATCH /api/v1/users/me/ — own profile."""
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(summary="Get own profile", responses={200: UserProfileSerializer})
     def get(self, request):
-        serializer = UserProfileSerializer(request.user)
-        return Response(serializer.data)
+        return Response(UserProfileSerializer(request.user).data)
 
+    @extend_schema(
+        summary="Update own profile",
+        request=UserProfileUpdateSerializer,
+        responses={200: UserProfileSerializer},
+    )
     def patch(self, request):
         serializer = UserProfileUpdateSerializer(
             request.user, data=request.data, partial=True
@@ -297,6 +443,13 @@ class MeView(APIView):
         return Response(UserProfileSerializer(request.user).data)
 
 
+@extend_schema(tags=["Users"])
+@extend_schema_view(
+    list=extend_schema(summary="List users"),
+    create=extend_schema(summary="Create user"),
+    retrieve=extend_schema(summary="Get user"),
+    partial_update=extend_schema(summary="Update user"),
+)
 class UserViewSet(
     mixins.ListModelMixin,
     mixins.CreateModelMixin,
@@ -304,11 +457,6 @@ class UserViewSet(
     mixins.UpdateModelMixin,
     viewsets.GenericViewSet,
 ):
-    """
-    /api/v1/users/ — user management.
-    Permissions: SA/AC/HR can manage; Manager sees team only.
-    """
-
     permission_classes = [IsAuthenticated]
     http_method_names = ["get", "post", "patch", "head", "options"]
     filter_fields = ["role", "status"]
@@ -317,10 +465,13 @@ class UserViewSet(
         user = self.request.user
         qs = User.objects.all()
         if user.role == Role.MANAGER:
-            # Managers see team only — for now return empty queryset
-            # (team scoping implemented in Sprint 3 with sessions)
             return qs.none()
-        return qs.order_by("email")
+        if user.role == Role.SUPER_ADMIN:
+            return qs.order_by("email")
+        # admin_client / hr — scope to their own tenant
+        from django.db import connection
+        schema = connection.schema_name
+        return qs.filter(tenant_schema=schema).order_by("email")
 
     def get_serializer_class(self):
         if self.action == "create":
@@ -344,22 +495,21 @@ class UserViewSet(
         kwargs["partial"] = True
         return self.update(request, *args, **kwargs)
 
+    @extend_schema(summary="Deactivate user", responses={200: UserAdminSerializer})
     @action(detail=True, methods=["post"], url_path="deactivate")
     def deactivate(self, request, pk=None):
         user = self.get_object()
         serializer = DeactivateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-
         if user.status == "deactivated":
             return Response(
                 {"detail": "User is already deactivated."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-
         user.deactivate()
-        # Signal handles: token revocation + notification (see signals.py)
         return Response(UserAdminSerializer(user).data)
 
+    @extend_schema(summary="Reactivate user", responses={200: UserAdminSerializer})
     @action(detail=True, methods=["post"], url_path="reactivate")
     def reactivate(self, request, pk=None):
         user = self.get_object()
@@ -371,6 +521,10 @@ class UserViewSet(
         user.reactivate()
         return Response(UserAdminSerializer(user).data)
 
+    @extend_schema(
+        summary="Request data export",
+        responses={202: OpenApiResponse(description="Export queued.")},
+    )
     @action(
         detail=True,
         methods=["post"],
@@ -379,7 +533,6 @@ class UserViewSet(
     )
     def export_data(self, request, pk=None):
         user = self.get_object()
-        # Allow self-export
         if request.user.pk != user.pk and not IsHR().has_permission(request, self):
             return Response(status=status.HTTP_403_FORBIDDEN)
 
@@ -388,11 +541,8 @@ class UserViewSet(
             context={"target_user": user},
         )
         serializer.is_valid(raise_exception=True)
-
-        # Use provided email or fall back to user's personal_email
         delivery_email = serializer.validated_data.get("personal_email") or user.personal_email
 
-        # Generate recovery token (30-day link)
         token = secrets.token_urlsafe(32)
         user.recovery_token = token
         user.recovery_expires_at = timezone.now() + timedelta(days=30)
@@ -400,7 +550,6 @@ class UserViewSet(
             user.personal_email = delivery_email
         user.save(update_fields=["recovery_token", "recovery_expires_at", "personal_email"])
 
-        # Queue export generation
         from apps.users.tasks import generate_data_export
         generate_data_export.delay(user_id=str(user.pk))
 
@@ -409,6 +558,10 @@ class UserViewSet(
             status=status.HTTP_202_ACCEPTED,
         )
 
+    @extend_schema(
+        summary="Provision users from CSV",
+        responses={202: OpenApiResponse(description="CSV queued for processing.")},
+    )
     @action(
         detail=False,
         methods=["post"],
@@ -438,6 +591,10 @@ class UserViewSet(
             status=status.HTTP_202_ACCEPTED,
         )
 
+    @extend_schema(
+        summary="Send invitation emails",
+        responses={202: OpenApiResponse(description="Invitations sent.")},
+    )
     @action(
         detail=False,
         methods=["post"],

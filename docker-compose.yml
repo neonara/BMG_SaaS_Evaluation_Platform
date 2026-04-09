@@ -1,18 +1,7 @@
 # ============================================================
-# BMG Platform — docker-compose.yml
-# Version: 4.2
-# Host: OVH VPS · Ubuntu 24.04 · Docker Engine 26
-# ============================================================
-# Usage:
-#   Development : docker compose --env-file .env.dev up -d
-#   Production  : docker compose --env-file .env.prod up -d
-#   Rebuild     : docker compose up -d --no-deps --build <service>
-#   Logs        : docker compose logs -f <service>
-#   Shell       : docker compose exec django_api bash
+# BMG Platform — docker-compose.yml  v4.3
 # ============================================================
 
-
-# ── Networks ────────────────────────────────────────────────
 networks:
   frontend_net:
     driver: bridge
@@ -20,9 +9,8 @@ networks:
     driver: bridge
   data_net:
     driver: bridge
-    internal: true   # no external access
+    internal: true
 
-# ── Volumes ─────────────────────────────────────────────────
 volumes:
   pg_data:
   redis_data:
@@ -33,38 +21,8 @@ volumes:
   gotenberg_tmp:
   selenium_tmp:
 
-# ── Services ─────────────────────────────────────────────────
 services:
 
-  # ──────────────────────────────────────────────
-  # NGINX — Reverse proxy + SSL termination
-  # ──────────────────────────────────────────────
-  # nginx:
-  #   image: nginx:1.26-alpine
-  #   container_name: bmg_nginx
-  #   restart: unless-stopped
-  #   ports:
-  #     - "80:80"
-  #     - "443:443"
-  #   volumes:
-  #     - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-  #     - ./nginx/conf.d:/etc/nginx/conf.d:ro
-  #     - ./nginx/certs:/etc/nginx/certs:ro
-  #     - static_files:/var/www/static:ro
-  #   depends_on:
-  #     - django_api
-  #     - platform_frontend
-  #   networks:
-  #     - frontend_net
-  #   healthcheck:
-  #     test: ["CMD", "nginx", "-t"]
-  #     interval: 30s
-  #     timeout: 10s
-  #     retries: 3
-
-  # ──────────────────────────────────────────────
-  # DJANGO API — Gunicorn + DRF + GraphQL
-  # ──────────────────────────────────────────────
   django_api:
     build:
       context: ./bmg_backend
@@ -72,15 +30,12 @@ services:
       target: production
     container_name: bmg_django
     restart: unless-stopped
-    expose:
-      - "8000"
+    ports:
+      - "8000:8000"
     volumes:
       - static_files:/app/staticfiles
-      # - ./bmg_backend:/app:ro   # uncomment in dev only
     env_file:
       - .env.prod
-    environment:
-      - DJANGO_SETTINGS_MODULE=config.settings.production
     depends_on:
       postgres:
         condition: service_healthy
@@ -92,55 +47,13 @@ services:
       - frontend_net
       - backend_net
       - data_net
-    command: >
-      sh -c "python manage.py migrate_schemas --shared &&
-             python manage.py collectstatic --noinput &&
-             gunicorn config.wsgi:application
-               --bind 0.0.0.0:8000
-               --workers 4
-               --worker-class gthread
-               --threads 2
-               --timeout 120
-               --access-logfile -
-               --error-logfile -"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/api/health/"]
       interval: 30s
       timeout: 10s
       retries: 5
-      start_period: 40s
+      start_period: 90s
 
-  # ──────────────────────────────────────────────
-  # NEXT.JS PLATFORM — Dashboard frontend
-  # ──────────────────────────────────────────────
-  # platform_frontend:
-  #   build:
-  #     context: ./frontend/platform
-  #     dockerfile: Dockerfile
-  #     args:
-  #       NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
-  #       NEXT_PUBLIC_GRAPHQL_URL: ${NEXT_PUBLIC_GRAPHQL_URL}
-  #       NEXT_PUBLIC_CLOUDINARY_CLOUD: ${NEXT_PUBLIC_CLOUDINARY_CLOUD}
-  #   container_name: bmg_platform
-  #   restart: unless-stopped
-  #   expose:
-  #     - "3000"
-  #   volumes:
-  #     - next_cache:/app/.next/cache
-  #   env_file:
-  #     - .env.prod
-  #   networks:
-  #     - frontend_net
-  #   healthcheck:
-  #     test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
-  #     interval: 30s
-  #     timeout: 10s
-  #     retries: 3
-
-  # ──────────────────────────────────────────────
-  # CELERY WORKER — Background tasks
-  # email · scoring · PDF · notifications
-  # ──────────────────────────────────────────────
   celery_worker:
     build:
       context: ./bmg_backend
@@ -152,8 +65,6 @@ services:
       - gotenberg_tmp:/tmp/gotenberg
     env_file:
       - .env.prod
-    environment:
-      - DJANGO_SETTINGS_MODULE=config.settings.production
     depends_on:
       rabbitmq:
         condition: service_healthy
@@ -164,6 +75,7 @@ services:
     networks:
       - backend_net
       - data_net
+    entrypoint: []
     command: >
       celery -A config worker
         --loglevel=info
@@ -171,10 +83,6 @@ services:
         --queues=default,scoring,pdf,email,notif
         --hostname=worker@%h
 
-  # ──────────────────────────────────────────────
-  # CELERY BEAT — Periodic task scheduler
-  # deadline reminders · cleanup · report expiry
-  # ──────────────────────────────────────────────
   celery_beat:
     build:
       context: ./bmg_backend
@@ -182,11 +90,8 @@ services:
       target: production
     container_name: bmg_celery_beat
     restart: unless-stopped
-
     env_file:
       - .env.prod
-    environment:
-      - DJANGO_SETTINGS_MODULE=config.settings.production
     depends_on:
       rabbitmq:
         condition: service_healthy
@@ -195,15 +100,13 @@ services:
     networks:
       - backend_net
       - data_net
+    entrypoint: []
     command: >
       celery -A config beat
         --loglevel=info
         --scheduler django_celery_beat.schedulers:DatabaseScheduler
         --pidfile=/tmp/celerybeat.pid
 
-  # ──────────────────────────────────────────────
-  # RABBITMQ — Message broker
-  # ──────────────────────────────────────────────
   rabbitmq:
     image: rabbitmq:3.13-management-alpine
     container_name: bmg_rabbitmq
@@ -211,13 +114,13 @@ services:
     expose:
       - "5672"
     ports:
-      - "127.0.0.1:15672:15672"   # management UI (localhost only)
+      - "127.0.0.1:15672:15672"
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
       - ./rabbitmq/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
     environment:
       - RABBITMQ_DEFAULT_USER=${RABBITMQ_USER}
-      - RABBITMQ_DEFAULT_PASS=${RABBITMQ_PASSWORD}   # fixed: was RABBITMQ_PASS
+      - RABBITMQ_DEFAULT_PASS=${RABBITMQ_PASSWORD}
       - RABBITMQ_DEFAULT_VHOST=bmg
     networks:
       - backend_net
@@ -227,10 +130,6 @@ services:
       timeout: 10s
       retries: 5
 
-  # ──────────────────────────────────────────────
-  # GOTENBERG — HTML → PDF (headless Chromium)
-  # Used by Celery worker for result reports
-  # ──────────────────────────────────────────────
   gotenberg:
     image: gotenberg/gotenberg:8
     container_name: bmg_gotenberg
@@ -239,10 +138,6 @@ services:
       - "3001"
     volumes:
       - gotenberg_tmp:/tmp/gotenberg
-    environment:
-      - GOTENBERG_API_TIMEOUT=30s
-      - CHROMIUM_DISABLE_ROUTES=false
-      - LOG_LEVEL=warn
     networks:
       - backend_net
     command:
@@ -252,10 +147,6 @@ services:
         --chromium-allow-list=.*
         --log-level=warn
 
-  # ──────────────────────────────────────────────
-  # SELENIUM GRID — Anti-cheat browser automation
-  # Controlled by Super Admin BMG only
-  # ──────────────────────────────────────────────
   selenium_grid:
     image: selenium/standalone-chrome:4.20
     container_name: bmg_selenium
@@ -264,19 +155,14 @@ services:
       - "4444"
     volumes:
       - selenium_tmp:/tmp/selenium
-      - /dev/shm:/dev/shm   # shared memory for Chrome
+      - /dev/shm:/dev/shm
     environment:
       - SE_NODE_MAX_SESSIONS=2
       - SE_NODE_OVERRIDE_MAX_SESSIONS=true
-      - SE_SESSION_REQUEST_TIMEOUT=300
     networks:
       - backend_net
     shm_size: "2gb"
 
-  # ──────────────────────────────────────────────
-  # POSTGRESQL 16 — Primary database
-  # django-tenants: separate schema per tenant
-  # ──────────────────────────────────────────────
   postgres:
     image: postgres:16-alpine
     container_name: bmg_postgres
@@ -291,7 +177,6 @@ services:
       - POSTGRES_DB=${POSTGRES_DB}
       - POSTGRES_USER=${POSTGRES_USER}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-      - POSTGRES_INITDB_ARGS=--encoding=UTF8 --locale=en_US.UTF-8
     networks:
       - data_net
     healthcheck:
@@ -299,17 +184,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
-    command: >
-      postgres
-        -c max_connections=100
-        -c shared_buffers=256MB
-        -c effective_cache_size=1GB
-        -c wal_buffers=16MB
-        -c checkpoint_completion_target=0.9
 
-  # ──────────────────────────────────────────────
-  # REDIS 7 — Cache · sessions · Celery backend
-  # ──────────────────────────────────────────────
   redis:
     image: redis:7.2-alpine
     container_name: bmg_redis
@@ -323,22 +198,18 @@ services:
     networks:
       - data_net
     healthcheck:
-      test: ["CMD", "redis-cli", "--no-auth-warning", "-a", "${REDIS_PASSWORD}", "ping"]
+      test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
 
-  # ──────────────────────────────────────────────
-  # PORTAINER — Docker management UI
-  # Access: http://127.0.0.1:9000
-  # ──────────────────────────────────────────────
   portainer:
     image: portainer/portainer-ce:latest
     container_name: bmg_portainer
     restart: unless-stopped
     ports:
-      - "127.0.0.1:9000:9000"   # Web UI — localhost only, proxy via nginx
-      - "127.0.0.1:9001:8000"   # Portainer agent — fixed: was 8000:8000 (conflict with django)
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:8000"
     volumes:
       - portainer_data:/data
       - /var/run/docker.sock:/var/run/docker.sock

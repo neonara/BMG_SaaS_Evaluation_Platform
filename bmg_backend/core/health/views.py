@@ -1,29 +1,34 @@
+"""core/health/views.py"""
 from django.db import connection
+from django_tenants.utils import schema_context
+from django.core.cache import cache
+from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from rest_framework.permissions import AllowAny
-from django.core.cache import cache
 
 
 class HealthCheckView(APIView):
-    permission_classes = [AllowAny]
+    permission_classes     = [AllowAny]
+    authentication_classes = []
 
     def get(self, request):
         checks = {}
-        # DB
         try:
-            with connection.cursor() as c:
-                c.execute("SELECT 1")
+            with schema_context("public"):          
+                with connection.cursor() as c:
+                    c.execute("SELECT 1")
             checks["db"] = "ok"
         except Exception as e:
-            checks["db"] = f"error: {e}"
-        # Cache
+            checks["db"] = "error: %s" % str(e)[:80]
+
         try:
-            cache.set("health", "ok", 5)
-            checks["cache"] = "ok" if cache.get("health") == "ok" else "miss"
+            cache.set("_health_check", "ok", 5)
+            checks["cache"] = "ok" if cache.get("_health_check") == "ok" else "miss"
         except Exception as e:
-            checks["cache"] = f"error: {e}"
+            checks["cache"] = "error: %s" % str(e)[:80]
 
         ok = all(v == "ok" for v in checks.values())
-        return Response({"status": "ok" if ok else "degraded", **checks},
-                        status=200 if ok else 503)
+        return Response(
+            {"status": "ok" if ok else "degraded", **checks},
+            status=200 if ok else 503,
+        )

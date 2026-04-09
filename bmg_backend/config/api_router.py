@@ -14,12 +14,18 @@ urlpatterns = [
     # ── Users & Auth ─────────────────────────────────────────────
     path("users/",        include("apps.users.urls.users")),
 
-    # ── Test models ──────────────────────────────────────────────
-    # path("tests/",        include("apps.tests_module.urls")),
+    # ── Social OAuth ─────────────────────────────────────────────
+    path("auth/social/",  include("apps.social_accounts.urls")),
 
-    # # ── Packs & Vouchers ─────────────────────────────────────────
-    # path("packs/",        include("apps.packs.urls")),
-    # path("public/packs/", include("apps.packs.urls_public")),  # Vitrine API (no auth)
+    # ── Multilingual ─────────────────────────────────────────────
+    path("languages/",    include("apps.multi_language.urls")),
+
+    # ── Test models ──────────────────────────────────────────────
+    path("tests/",        include("apps.tests_module.urls")),
+
+    # ── Packs & Vouchers ─────────────────────────────────────────
+    path("packs/",        include("apps.packs.urls")),
+    path("public/packs/", include("apps.packs.urls_public")),  # Vitrine API (no auth)
 
     # # ── Sessions ─────────────────────────────────────────────────
     # path("sessions/",     include("apps.sessions_module.urls")),

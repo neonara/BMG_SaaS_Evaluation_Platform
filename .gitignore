@@ -1,6 +1,12 @@
 postgres
 rabbitmq
 redis
+<<<<<<< HEAD
 .env.test
 .env.prod
 .env
+=======
+.env.prod
+.env
+.env.test
+>>>>>>> sprint1

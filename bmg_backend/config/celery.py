@@ -15,7 +15,7 @@ app.config_from_object("django.conf:settings", namespace="CELERY")
 
 # Auto-discover tasks in all INSTALLED_APPS
 app.autodiscover_tasks()
-
+app.autodiscover_tasks(["core"]) 
 
 @app.task(bind=True, ignore_result=True)
 def debug_task(self) -> None:  # pragma: no cover
